@@ -28,10 +28,10 @@ private struct CrownView: View {
                     sensitivity: .low, isContinuous: true, isHapticFeedbackEnabled: false,
                     onChange: { _ in }, onIdle: { model.crownIdle() })
             Text(model.inputText).font(.caption2).lineLimit(2).multilineTextAlignment(.center)
-            Button("留下阅读标记") {
-                model.mark(); crownFocused = true
-            }.disabled(!model.isReady)
-            Text("未验证身份 · 仅测试窗口").font(.system(size: 9)).foregroundStyle(.secondary)
+            Button(model.controlEnabled ? "暂停滚轮" : "继续滚轮") {
+                model.toggleControl(); crownFocused = true
+            }.disabled(!model.canToggle)
+            Text("鼠标放在哪里，就滚动哪里").font(.system(size: 9)).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 6)
         .onAppear {

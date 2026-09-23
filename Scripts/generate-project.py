@@ -28,7 +28,7 @@ for app, product, sdk, settings in [
     ('MacApp', 'WristControl', 'macosx', {
         'MACOSX_DEPLOYMENT_TARGET': '13.0', 'PRODUCT_BUNDLE_IDENTIFIER': '$(WRIST_BUNDLE_PREFIX).mac',
         'INFOPLIST_FILE': 'Config/Mac-Info.plist', 'CODE_SIGN_ENTITLEMENTS': 'Config/Mac.entitlements',
-        'ENABLE_APP_SANDBOX': 'YES', 'SUPPORTED_PLATFORMS': 'macosx',
+        'ENABLE_APP_SANDBOX': 'NO', 'SUPPORTED_PLATFORMS': 'macosx',
     }),
     ('WatchApp', 'WristWatch', 'watchos', {
         'WATCHOS_DEPLOYMENT_TARGET': '9.0', 'PRODUCT_BUNDLE_IDENTIFIER': '$(WRIST_BUNDLE_PREFIX).watch',

@@ -1,15 +1,23 @@
 import AppKit
 import CoreBluetooth
 import WristCore
+import CryptoKit
 
 /// All callbacks and UI output execute on the main queue.
 final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
     let journal = Journal(source: "mac")
     var onStatus: ((String) -> Void)?
     var onScroll: ((Double) -> Bool)?
-    var onMark: (() -> Bool)?
+    var onSetEnabled: ((Bool) -> Void)?
+    var onResetOutput: (() -> Void)?
     var onExport: ((Data?, String) -> Void)?
-    var targetReady: () -> Bool = { false }
+    var controlState: () -> ControlState = { [] }
+    private var link: AuthenticatedLink?
+    private var hello: Frame?
+    private var challenge: Frame?
+    private var handshakeStarted = 0.0
+    private var pendingChallenge: Data?
+    var identityVerified: Bool { link != nil }
     private var manager: CBPeripheralManager?
     private var input: CBMutableCharacteristic?
     private var status: CBMutableCharacteristic?
@@ -23,15 +31,14 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
     private var exportID: UInt32 = 0
     private var exportStarted = 0.0
     private var exportProgress = 0.0
-    private var previousTarget = false
+    private var previousState: ControlState = []
     private(set) var acceptedCount = 0
     private(set) var rejectedCount = 0
-    private(set) var markCount = 0
     private var now: Double { ProcessInfo.processInfo.systemUptime }
 
     func start() {
         guard manager == nil else { return }
-        journal.record("app_launch", detail: "test_window_only; identity_unverified")
+        journal.record("app_launch", detail: "system_wheel; requires_pair_authentication")
         manager = CBPeripheralManager(delegate: self, queue: .main)
         timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.tick() }
     }
@@ -45,6 +52,7 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
 
     private func reset(_ reason: String) {
         gate.revoke(); peer = nil; pendingAck = nil; pendingStatus = nil
+        link = nil; hello = nil; challenge = nil; pendingChallenge = nil; onResetOutput?()
         if assembler != nil { finishExport(nil, reason: reason) }
         journal.record("session_revoked", detail: reason)
     }
@@ -78,7 +86,7 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         guard error == nil else { report("发布蓝牙服务失败"); journal.record("service_failed"); return }
         peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [CBUUID(string: BLEIDs.service)],
-                                     CBAdvertisementDataLocalNameKey: "WristControl Test"])
+                                     CBAdvertisementDataLocalNameKey: "WristControl"])
     }
 
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
@@ -92,10 +100,14 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
         guard peer == nil || peer?.identifier == central.identifier else {
             journal.record("additional_central_ignored"); return
         }
-        peer = central
+        guard central.maximumUpdateValueLength >= AuthenticatedLink.frameSize else {
+            report("蓝牙数据长度不足，无法建立认证连接")
+            journal.record("mtu_too_small", detail: String(central.maximumUpdateValueLength)); return
+        }
+        peer = central; handshakeStarted = now
         peripheral.setDesiredConnectionLatency(.low, for: central)
-        journal.record("subscribed", detail: "identity_unverified; awaiting_hello")
-        report("已连接，等待协议确认 · 未验证身份")
+        journal.record("subscribed", detail: "awaiting_authentication;mtu=\(central.maximumUpdateValueLength)")
+        report("已连接，正在验证设备身份")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
@@ -107,7 +119,7 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
     private func beginSession() {
         gate.begin(UInt64.random(in: 1...UInt64.max))
         pendingAck = nil; pendingStatus = nil
-        previousTarget = targetReady()
+        previousState = controlState(); onResetOutput?()
         journal.record("session_started", detail: String(gate.session, radix: 16))
         publishStatus()
     }
@@ -116,10 +128,11 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
         if assembler != nil, now - exportStarted > 120 || now - exportProgress > 6 {
             finishExport(nil, reason: "watch_export_timeout")
         }
-        guard peer != nil, gate.session != 0 else { return }
-        let ready = targetReady()
-        if ready != previousTarget {
-            // Window closure, minimization, screen lock, and restoration isolate old intents.
+        if peer != nil, link == nil, now - handshakeStarted > 10 { reset("authentication_timeout") }
+        guard peer != nil, link != nil, gate.session != 0 else { return }
+        let state = controlState()
+        if state != previousState {
+            // Permission, pause, sleep and protected-data transitions isolate old intents.
             if assembler != nil { finishExport(nil, reason: "target_changed") }
             beginSession()
         }
@@ -135,15 +148,20 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
     private func statusFrame() -> Frame {
         Frame(assembler == nil ? .ready : .exportRequest, session: gate.session,
               sequence: assembler == nil ? gate.lastSequence : exportID,
-              value: targetReady() && assembler == nil ? 1 : 0,
+              value: assembler == nil ? controlState().rawValue : 0,
               ticket: gate.issue(now: now))
     }
 
     private func publishStatus() {
-        guard gate.session != 0 else { return }
+        guard link != nil, gate.session != 0 else { return }
         pendingStatus = statusFrame(); flushNotifications()
         if assembler != nil { report("正在导出两端诊断，控制暂时暂停") }
-        else { report(targetReady() ? "测试窗口可控制 · 未验证身份" : "测试窗口不可用，控制已暂停") }
+        else {
+            let state = controlState()
+            if !state.contains(.permission) { report("设备已认证 · 请允许系统滚轮权限") }
+            else if !state.contains(.interactive) { report("设备已认证 · 电脑锁定或暂不可交互") }
+            else { report(state.canScroll ? "设备已认证 · 表冠控制鼠标所在区域" : "设备已认证 · 已暂停") }
+        }
     }
 
     private func acknowledge(_ frame: Frame, accepted: Bool) {
@@ -154,12 +172,17 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
 
     private func flushNotifications() {
         guard let manager, let status, let peer else { return }
+        if let packet = pendingChallenge {
+            guard manager.updateValue(packet, for: status, onSubscribedCentrals: [peer]) else { return }
+            pendingChallenge = nil
+        }
         if let ack = pendingAck {
-            guard manager.updateValue(ack.data, for: status, onSubscribedCentrals: [peer]) else { return }
+            guard let packet = link?.seal(ack.data, purpose: .status),
+                  manager.updateValue(packet, for: status, onSubscribedCentrals: [peer]) else { return }
             pendingAck = nil
         }
-        if let latest = pendingStatus,
-           manager.updateValue(latest.data, for: status, onSubscribedCentrals: [peer]) { pendingStatus = nil }
+        if let latest = pendingStatus, let packet = link?.seal(latest.data, purpose: .status),
+           manager.updateValue(packet, for: status, onSubscribedCentrals: [peer]) { pendingStatus = nil }
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) { flushNotifications() }
@@ -169,7 +192,11 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
               gate.session != 0, request.offset == 0 else {
             peripheral.respond(to: request, withResult: .readNotPermitted); return
         }
-        request.value = statusFrame().data
+        let frame = statusFrame()
+        guard let packet = link?.seal(frame.data, purpose: .status) else {
+            peripheral.respond(to: request, withResult: .readNotPermitted); return
+        }
+        request.value = packet
         peripheral.respond(to: request, withResult: .success)
     }
 
@@ -183,7 +210,8 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
             peripheral.respond(to: request, withResult: .writeNotPermitted); return
         }
         if request.characteristic.uuid == diagnostics?.uuid {
-            guard var collected = assembler, let chunk = DiagnosticChunk(data: data), collected.append(chunk) else {
+            guard let payload = link?.open(data, purpose: .diagnostic),
+                  var collected = assembler, let chunk = DiagnosticChunk(data: payload), collected.append(chunk) else {
                 peripheral.respond(to: request, withResult: .unlikelyError); return
             }
             assembler = collected
@@ -195,17 +223,20 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
             }
             return
         }
-        guard request.characteristic.uuid == input?.uuid, let frame = Frame(data: data) else {
-            peripheral.respond(to: request, withResult: .invalidAttributeValueLength); return
+        guard request.characteristic.uuid == input?.uuid else {
+            peripheral.respond(to: request, withResult: .writeNotPermitted); return
+        }
+        if link == nil {
+            handleHandshake(data, request: request, peripheral: peripheral); return
+        }
+        guard let payload = link?.open(data, purpose: .input), let frame = Frame(data: payload) else {
+            rejectedCount += 1; journal.record("authentication_or_replay_rejected")
+            peripheral.respond(to: request, withResult: .insufficientAuthentication); return
         }
         journal.record("received", frame: frame, detail: "kind=\(frame.kind);value=\(frame.value)")
-        if frame.kind == .hello {
-            guard assembler == nil, frame.session == 0, frame.sequence == 0, frame.value == 0 else {
-                peripheral.respond(to: request, withResult: .unlikelyError); return
-            }
-            beginSession(); peripheral.respond(to: request, withResult: .success); return
-        }
-        if let reason = gate.accept(frame, now: now, targetReady: targetReady() && assembler == nil) {
+        let state = controlState()
+        if state != previousState { beginSession() }
+        if let reason = gate.accept(frame, now: now, targetReady: state.canScroll && assembler == nil) {
             rejectedCount += 1; journal.record("rejected", frame: frame, detail: reason)
             peripheral.respond(to: request, withResult: .success); acknowledge(frame, accepted: false); return
         }
@@ -213,10 +244,9 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
         let applied: Bool
         switch frame.kind {
         case .scroll: applied = onScroll?(LinearScroll.points(frame.value)) ?? false
-        case .mark:
-            applied = onMark?() ?? false
-            if applied { markCount += 1 }
-        case .idle: applied = true
+        case .setControl:
+            onSetEnabled?(frame.value == 1); applied = true
+        case .idle: onResetOutput?(); applied = true
         default: applied = false
         }
         if applied { acceptedCount += 1 } else { rejectedCount += 1 }
@@ -224,12 +254,37 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
                        detail: "receive_to_handler_ms=\((now - receiveTime) * 1000);not_display_latency")
         peripheral.respond(to: request, withResult: .success)
         acknowledge(frame, accepted: applied)
+        if !applied { targetDidChange("output_failed") }
+        else if frame.kind == .setControl { targetDidChange("user_control_changed") }
+    }
+
+    private func handleHandshake(_ data: Data, request: CBATTRequest, peripheral: CBPeripheralManager) {
+        guard let secretBytes = PairingKeyStore.read().data else {
+            report("缺少可用的设备密钥，请完成本地安装配置")
+            peripheral.respond(to: request, withResult: .insufficientAuthentication); return
+        }
+        let secret = SymmetricKey(data: secretBytes)
+        if let frame = Frame(data: data), frame.kind == .hello, frame.session != 0, hello == nil {
+            hello = frame; let nonce = PairAuthentication.nonce(.challenge); challenge = nonce
+            pendingChallenge = PairAuthentication.challengePacket(secret: secret, hello: frame, challenge: nonce)
+            journal.record("authentication_challenge")
+            peripheral.respond(to: request, withResult: .success); flushNotifications(); return
+        }
+        guard let hello, let challenge,
+              PairAuthentication.verifyProof(data, secret: secret, hello: hello, challenge: challenge) else {
+            rejectedCount += 1; journal.record("authentication_failed")
+            peripheral.respond(to: request, withResult: .insufficientAuthentication); return
+        }
+        link = AuthenticatedLink(key: PairAuthentication.sessionKey(secret: secret, hello: hello, challenge: challenge), role: .mac)
+        self.hello = nil; self.challenge = nil; pendingChallenge = nil
+        journal.record("identity_verified", detail: "per_pair_psk_v2")
+        peripheral.respond(to: request, withResult: .success); beginSession()
     }
 
     func exportDiagnostics() {
         guard assembler == nil else { return }
         journal.record("export_requested"); journal.persist()
-        guard peer != nil, gate.session != 0 else { onExport?(nil, "watch_unavailable_mac_only"); return }
+        guard peer != nil, link != nil, gate.session != 0 else { onExport?(nil, "watch_unavailable_mac_only"); return }
         exportID = exportID == UInt32.max ? 1 : exportID + 1
         assembler = DiagnosticAssembler(session: gate.session); exportStarted = now; exportProgress = now
         publishStatus()
@@ -239,7 +294,7 @@ final class MacBluetooth: NSObject, CBPeripheralManagerDelegate {
         assembler = nil
         journal.record("export_finished", detail: reason)
         // Fresh session after export: no prior pending action is allowed to execute.
-        if peer != nil { beginSession() }
+        if peer != nil, link != nil { beginSession() }
         onExport?(data, reason)
     }
 }

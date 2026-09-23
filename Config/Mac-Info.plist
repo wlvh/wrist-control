@@ -8,9 +8,9 @@
 <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSBluetoothAlwaysUsageDescription</key><string>腕控通过蓝牙接收手表表冠与按钮输入，仅控制本应用的阅读测试窗口。</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>腕控通过蓝牙接收已授权手表的表冠输入，将其转换为鼠标所在区域的上下滚轮；按钮用于暂停或继续。</string>
 </dict></plist>
