@@ -26,6 +26,8 @@ xcodebuild -project WristControl.xcodeproj -scheme WristWatch -destination 'gene
 
 这些命令的成功不代表真实设备已安装或蓝牙链路已通过。本轮真实设备证据与自动测试分开记录。
 
+这次电脑、手表和手机的开发配对、安装连接与运行时蓝牙路线，及实际遇到的代理和重复实例问题，记录在[首次真机联调笔记](docs/device-connection-notes.md)。
+
 ## 试用方式
 
 1. 从“应用程序”打开 Mac 腕控，保持编号长文窗口可见，并只运行这一份电脑应用。
