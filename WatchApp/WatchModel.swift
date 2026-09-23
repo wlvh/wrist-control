@@ -49,13 +49,17 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
 
     override init() {
         super.init()
+        journal.record("app_launch", detail: "system_wheel_v2;foreground_only")
+        journal.persist()
         let keyStatus = PairingKeyStore.importBootstrapIfPresent()
-        journal.record("app_launch", detail: "foreground_only;key_status=\(keyStatus)")
+        journal.record("pair_key_load", detail: "key_status=\(keyStatus)")
+        journal.persist()
     }
 
     func setActive(_ value: Bool) {
         guard active != value else { return }
         active = value; journal.record(value ? "scene_active" : "scene_inactive")
+        journal.persist()
         clearIntent(); delta.rebase(to: crownPosition)
         if value {
             if manager == nil { manager = CBCentralManager(delegate: self, queue: .main) }
