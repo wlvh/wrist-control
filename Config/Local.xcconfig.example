@@ -1,0 +1,5 @@
+// Copy to Local.xcconfig (gitignored), or choose a Team in Xcode Signing & Capabilities.
+WRIST_DEVELOPMENT_TEAM = YOUR_TEAM_ID
+WRIST_BUNDLE_PREFIX = dev.yourname.wristcontrol
+// Optional: restrict codesign to a separately created development keychain.
+// OTHER_CODE_SIGN_FLAGS = $(inherited) --keychain /absolute/path/to/Development.keychain-db

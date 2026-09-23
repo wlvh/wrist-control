@@ -1,0 +1,49 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		6280E40656CCF01BD4D28240 = { isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Base.xcconfig; sourceTree = "<group>"; };
+		BC4A71180870F7945155FBB0 = { isa = XCLocalSwiftPackageReference; relativePath = .; };
+		14D8DD56E834CA5A4A88276B = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App.swift"; sourceTree = "<group>"; };
+		592DBC5156611B9E31D31527 = { isa = PBXBuildFile; fileRef = 14D8DD56E834CA5A4A88276B; };
+		36C701E3744BCA024CE26CDA = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Article.swift"; sourceTree = "<group>"; };
+		1F873B37904E703C9B88E4E4 = { isa = PBXBuildFile; fileRef = 36C701E3744BCA024CE26CDA; };
+		D706DCF7F8E27A067D1F79E6 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MacBluetooth.swift"; sourceTree = "<group>"; };
+		AC552450E0AFBFCD3F8F3504 = { isa = PBXBuildFile; fileRef = D706DCF7F8E27A067D1F79E6; };
+		B983EAA87808E767625E2F44 = { isa = PBXGroup; children = (14D8DD56E834CA5A4A88276B, 36C701E3744BCA024CE26CDA, D706DCF7F8E27A067D1F79E6,); path = MacApp; sourceTree = "<group>"; };
+		36815E05E59181BABA00D96C = { isa = PBXFileReference; explicitFileType = wrapper.application; path = WristControl.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4A560CB57AE030DEEAD9511A = { isa = XCSwiftPackageProductDependency; package = BC4A71180870F7945155FBB0; productName = WristCore; };
+		740BE5D2C4867C831447E5D8 = { isa = PBXBuildFile; productRef = 4A560CB57AE030DEEAD9511A; };
+		C660C419268322760432AA01 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (592DBC5156611B9E31D31527, 1F873B37904E703C9B88E4E4, AC552450E0AFBFCD3F8F3504,); runOnlyForDeploymentPostprocessing = 0; };
+		1A94101BF81C3426EFA113CB = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (740BE5D2C4867C831447E5D8,); runOnlyForDeploymentPostprocessing = 0; };
+		E7626E8CF90F4A11F37C9FC7 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		9250E5C740F3C283C1DC036F = { isa = XCBuildConfiguration; baseConfigurationReference = 6280E40656CCF01BD4D28240; buildSettings = { SDKROOT = "macosx"; PRODUCT_NAME = "WristControl"; GENERATE_INFOPLIST_FILE = "NO"; ONLY_ACTIVE_ARCH = "YES"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; MACOSX_DEPLOYMENT_TARGET = "13.0"; PRODUCT_BUNDLE_IDENTIFIER = "$(WRIST_BUNDLE_PREFIX).mac"; INFOPLIST_FILE = "Config/Mac-Info.plist"; CODE_SIGN_ENTITLEMENTS = "Config/Mac.entitlements"; ENABLE_APP_SANDBOX = "YES"; SUPPORTED_PLATFORMS = "macosx"; }; name = Debug; };
+		E326AF2631E0744EF2216600 = { isa = XCBuildConfiguration; baseConfigurationReference = 6280E40656CCF01BD4D28240; buildSettings = { SDKROOT = "macosx"; PRODUCT_NAME = "WristControl"; GENERATE_INFOPLIST_FILE = "NO"; ONLY_ACTIVE_ARCH = "NO"; SWIFT_OPTIMIZATION_LEVEL = "-O"; MACOSX_DEPLOYMENT_TARGET = "13.0"; PRODUCT_BUNDLE_IDENTIFIER = "$(WRIST_BUNDLE_PREFIX).mac"; INFOPLIST_FILE = "Config/Mac-Info.plist"; CODE_SIGN_ENTITLEMENTS = "Config/Mac.entitlements"; ENABLE_APP_SANDBOX = "YES"; SUPPORTED_PLATFORMS = "macosx"; }; name = Release; };
+		0577E3661856F008E4BE015B = { isa = XCConfigurationList; buildConfigurations = (9250E5C740F3C283C1DC036F, E326AF2631E0744EF2216600,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		3C42B940F09ED82DD361273F = { isa = PBXNativeTarget; buildConfigurationList = 0577E3661856F008E4BE015B; buildPhases = (C660C419268322760432AA01, 1A94101BF81C3426EFA113CB, E7626E8CF90F4A11F37C9FC7,); buildRules = (); dependencies = (); name = WristControl; packageProductDependencies = (4A560CB57AE030DEEAD9511A,); productName = WristControl; productReference = 36815E05E59181BABA00D96C; productType = "com.apple.product-type.application"; };
+		7B32AB40E32ABB401894173D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WatchModel.swift"; sourceTree = "<group>"; };
+		DF3F26F50BD7F059EC263084 = { isa = PBXBuildFile; fileRef = 7B32AB40E32ABB401894173D; };
+		9E176F8D5E837021ED739F93 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WristWatchApp.swift"; sourceTree = "<group>"; };
+		8784AD9A1200F18C94510646 = { isa = PBXBuildFile; fileRef = 9E176F8D5E837021ED739F93; };
+		D5DE697983FAC7DA9FBFDFB6 = { isa = PBXGroup; children = (7B32AB40E32ABB401894173D, 9E176F8D5E837021ED739F93,); path = WatchApp; sourceTree = "<group>"; };
+		32585BA709789AE1CB03975E = { isa = PBXFileReference; explicitFileType = wrapper.application; path = WristWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		50B7C3BCFBB1F24AA14AFBCA = { isa = XCSwiftPackageProductDependency; package = BC4A71180870F7945155FBB0; productName = WristCore; };
+		06EE168945C15B64B07E60CA = { isa = PBXBuildFile; productRef = 50B7C3BCFBB1F24AA14AFBCA; };
+		5447C58A6F476F922DC00EA8 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (DF3F26F50BD7F059EC263084, 8784AD9A1200F18C94510646,); runOnlyForDeploymentPostprocessing = 0; };
+		26931ADCBE5EBE896F41E323 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (06EE168945C15B64B07E60CA,); runOnlyForDeploymentPostprocessing = 0; };
+		F7FE1EDDD354708F24117BF0 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		85A747265289038356F2FB78 = { isa = XCBuildConfiguration; baseConfigurationReference = 6280E40656CCF01BD4D28240; buildSettings = { SDKROOT = "watchos"; PRODUCT_NAME = "WristWatch"; GENERATE_INFOPLIST_FILE = "NO"; ONLY_ACTIVE_ARCH = "YES"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; WATCHOS_DEPLOYMENT_TARGET = "9.0"; PRODUCT_BUNDLE_IDENTIFIER = "$(WRIST_BUNDLE_PREFIX).watch"; INFOPLIST_FILE = "Config/Watch-Info.plist"; TARGETED_DEVICE_FAMILY = "4"; SUPPORTED_PLATFORMS = "watchos watchsimulator"; SKIP_INSTALL = "NO"; }; name = Debug; };
+		C96E093CBCD3593531EDEBB4 = { isa = XCBuildConfiguration; baseConfigurationReference = 6280E40656CCF01BD4D28240; buildSettings = { SDKROOT = "watchos"; PRODUCT_NAME = "WristWatch"; GENERATE_INFOPLIST_FILE = "NO"; ONLY_ACTIVE_ARCH = "NO"; SWIFT_OPTIMIZATION_LEVEL = "-O"; WATCHOS_DEPLOYMENT_TARGET = "9.0"; PRODUCT_BUNDLE_IDENTIFIER = "$(WRIST_BUNDLE_PREFIX).watch"; INFOPLIST_FILE = "Config/Watch-Info.plist"; TARGETED_DEVICE_FAMILY = "4"; SUPPORTED_PLATFORMS = "watchos watchsimulator"; SKIP_INSTALL = "NO"; }; name = Release; };
+		B577258D935C832B51815A35 = { isa = XCConfigurationList; buildConfigurations = (85A747265289038356F2FB78, C96E093CBCD3593531EDEBB4,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		278885B801ED6FA3145CA173 = { isa = PBXNativeTarget; buildConfigurationList = B577258D935C832B51815A35; buildPhases = (5447C58A6F476F922DC00EA8, 26931ADCBE5EBE896F41E323, F7FE1EDDD354708F24117BF0,); buildRules = (); dependencies = (); name = WristWatch; packageProductDependencies = (50B7C3BCFBB1F24AA14AFBCA,); productName = WristWatch; productReference = 32585BA709789AE1CB03975E; productType = "com.apple.product-type.application"; };
+		0A3E27B8CA818264D75C8D81 = { isa = PBXGroup; children = (36815E05E59181BABA00D96C, 32585BA709789AE1CB03975E,); name = Products; sourceTree = "<group>"; };
+		4813494D137E1631BBA301D5 = { isa = PBXGroup; children = (B983EAA87808E767625E2F44, D5DE697983FAC7DA9FBFDFB6, 6280E40656CCF01BD4D28240, 0A3E27B8CA818264D75C8D81,); sourceTree = "<group>"; };
+		488864B3D19480A82F7F1786 = { isa = XCBuildConfiguration; buildSettings = {}; name = Debug; };
+		35B1014F135DE9B45529B733 = { isa = XCBuildConfiguration; buildSettings = {}; name = Release; };
+		B4E10CAA9C5E22150B71559C = { isa = XCConfigurationList; buildConfigurations = (488864B3D19480A82F7F1786, 35B1014F135DE9B45529B733,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		244210E48437B6556980A702 = { isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; }; buildConfigurationList = B4E10CAA9C5E22150B71559C; compatibilityVersion = "Xcode 14.0"; developmentRegion = zh_CN; hasScannedForEncodings = 0; knownRegions = (en, zh_CN, Base); mainGroup = 4813494D137E1631BBA301D5; productRefGroup = 0A3E27B8CA818264D75C8D81; projectDirPath = ""; projectRoot = ""; packageReferences = (BC4A71180870F7945155FBB0,); targets = (3C42B940F09ED82DD361273F, 278885B801ED6FA3145CA173,); };
+	};
+	rootObject = 244210E48437B6556980A702;
+}
