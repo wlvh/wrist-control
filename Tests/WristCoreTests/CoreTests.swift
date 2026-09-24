@@ -4,7 +4,7 @@ import Testing
 
 struct CoreTests {
     @Test func testLateAcknowledgementCannotClearDifferentSessionOrSequence() {
-        let pending = Frame(.mark, session: 22, sequence: 1)
+        let pending = Frame(.idle, session: 22, sequence: 1)
         #expect(!Frame(.rejected, session: 11, sequence: 1).acknowledges(pending))
         #expect(!Frame(.rejected, session: 22, sequence: 2).acknowledges(pending))
         #expect(!Frame(.ready, session: 22, sequence: 1).acknowledges(pending))
@@ -65,7 +65,7 @@ struct CoreTests {
     @Test func testReceiverRejectsDuplicateOldSessionExpiredAndUnavailableTarget() {
         var gate = SessionGate(); gate.begin(123)
         let ticket = gate.issue(now: 10)
-        let frame = Frame(.mark, session: 123, sequence: 1, ticket: ticket)
+        let frame = Frame(.idle, session: 123, sequence: 1, ticket: ticket)
         expectNil(gate.accept(frame, now: 10.1, targetReady: true))
         expectEqual(gate.accept(frame, now: 10.11, targetReady: true), "duplicate_or_reordered")
         let next = Frame(.scroll, session: 123, sequence: 2, value: -100, ticket: ticket)
@@ -75,7 +75,7 @@ struct CoreTests {
         gate.begin(456)
         expectEqual(gate.accept(next, now: 10.2, targetReady: true), "old_session")
         gate.revoke()
-        expectEqual(gate.accept(Frame(.mark, sequence: 1), now: 10, targetReady: true), "old_session")
+        expectEqual(gate.accept(Frame(.idle, sequence: 1), now: 10, targetReady: true), "old_session")
     }
 
     @Test func testReceiverRejectsImpossibleAmountsAndCapabilitiesWithoutConsumingSequence() {
@@ -83,7 +83,7 @@ struct CoreTests {
         expectEqual(gate.accept(Frame(.scroll, session: 1, sequence: 1, value: Int32.min, ticket: ticket),
                                    now: 0, targetReady: true), "oversized_scroll")
         expectEqual(gate.accept(Frame(.hello, session: 1, sequence: 1, ticket: ticket), now: 0, targetReady: true), "invalid_action")
-        expectEqual(gate.accept(Frame(.mark, session: 1, sequence: 1, value: 1, ticket: ticket), now: 0, targetReady: true), "invalid_value")
+        expectEqual(gate.accept(Frame(.idle, session: 1, sequence: 1, value: 1, ticket: ticket), now: 0, targetReady: true), "invalid_value")
         expectEqual(gate.lastSequence, 0)
     }
 

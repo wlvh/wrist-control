@@ -65,14 +65,46 @@ public struct SessionGate {
         return currentTicket
     }
     public mutating func accept(_ frame: Frame, now: TimeInterval, targetReady: Bool) -> String? {
-        guard targetReady else { return "target_unavailable" }
+        // Pause/resume must remain reachable while output is paused. Authentication
+        // is checked by the transport before this gate is called.
+        guard targetReady || frame.kind == .setControl else { return "target_unavailable" }
         guard session != 0, frame.session == session else { return "old_session" }
-        guard [.scroll, .mark, .idle].contains(frame.kind) else { return "invalid_action" }
+        guard [.scroll, .idle, .setControl].contains(frame.kind) else { return "invalid_action" }
         guard frame.sequence > lastSequence else { return "duplicate_or_reordered" }
         guard let issued = tickets[frame.ticket], now >= issued, now - issued <= Self.lifetime else { return "expired_ticket" }
         guard frame.kind != .scroll || abs(Int64(frame.value)) <= 737_280 else { return "oversized_scroll" }
-        guard frame.kind == .scroll || frame.value == 0 else { return "invalid_value" }
+        guard frame.kind == .scroll || (frame.kind == .setControl ? (0...1).contains(frame.value) : frame.value == 0) else { return "invalid_value" }
         lastSequence = frame.sequence
         return nil
     }
+}
+
+/// CGEvent takes integer pixels. Preserve fractions during a stroke, discard the
+/// previous direction's remainder immediately on reversal, and never drain later.
+public struct WheelAccumulator {
+    private var remainder = 0.0
+    private var direction = 0
+    public init() {}
+    public mutating func reset() { remainder = 0; direction = 0 }
+    public mutating func consume(points: Double) -> Int32? {
+        guard points.isFinite, abs(points) <= 720 else { reset(); return nil }
+        guard points != 0 else { return 0 }
+        let next = points > 0 ? 1 : -1
+        if next != direction { remainder = 0 }
+        direction = next
+        let amount = points + remainder
+        let whole = amount.rounded(.towardZero)
+        remainder = amount - whole
+        return Int32(whole)
+    }
+}
+
+public struct ControlState: OptionSet, Equatable {
+    public let rawValue: Int32
+    public init(rawValue: Int32) { self.rawValue = rawValue }
+    public static let enabled = Self(rawValue: 1)
+    public static let permission = Self(rawValue: 2)
+    public static let interactive = Self(rawValue: 4)
+    public static let ready: Self = [.enabled, .permission, .interactive]
+    public var canScroll: Bool { contains(.ready) }
 }

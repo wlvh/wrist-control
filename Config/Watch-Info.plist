@@ -8,9 +8,9 @@
 <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>WKApplication</key><true/>
 <key>WKWatchOnly</key><true/>
-<key>NSBluetoothAlwaysUsageDescription</key><string>腕控需要蓝牙直连电脑，将表冠与按钮操作发送到电脑上的腕控阅读测试窗口。</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>腕控通过蓝牙直连已授权电脑，用表冠控制鼠标所在区域的上下滚轮，并用按钮暂停或继续。</string>
 </dict></plist>

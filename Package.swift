@@ -7,6 +7,8 @@ let package = Package(
     products: [.library(name: "WristCore", targets: ["WristCore"])],
     targets: [
         .target(name: "WristCore", path: "Shared/Sources/WristCore"),
-        .testTarget(name: "WristCoreTests", dependencies: ["WristCore"], path: "Tests/WristCoreTests")
+        .target(name: "WristMacOutput", dependencies: ["WristCore"], path: "MacApp",
+                exclude: ["App.swift", "MacBluetooth.swift", "Article.swift"]),
+        .testTarget(name: "WristCoreTests", dependencies: ["WristCore", "WristMacOutput"], path: "Tests/WristCoreTests")
     ]
 )
