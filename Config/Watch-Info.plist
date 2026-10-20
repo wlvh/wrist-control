@@ -12,5 +12,7 @@
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>WKApplication</key><true/>
 <key>WKWatchOnly</key><true/>
-<key>NSBluetoothAlwaysUsageDescription</key><string>腕控通过蓝牙直连已授权电脑，用表冠控制鼠标所在区域的上下滚轮，并用按钮暂停或继续。</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>腕控通过蓝牙直连已授权电脑，用表冠滚轮、手腕移动指针和屏幕点击控制电脑。</string>
+<key>WristSourceRevision</key><string>$(WRIST_SOURCE_REVISION)</string>
+<key>NSMotionUsageDescription</key><string>腕控只在前台读取手腕方向，用于移动电脑指针和指向标定。</string>
 </dict></plist>

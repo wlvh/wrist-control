@@ -13,4 +13,5 @@
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSBluetoothAlwaysUsageDescription</key><string>腕控通过蓝牙接收已授权手表的表冠输入，将其转换为鼠标所在区域的上下滚轮；按钮用于暂停或继续。</string>
+<key>WristSourceRevision</key><string>$(WRIST_SOURCE_REVISION)</string>
 </dict></plist>

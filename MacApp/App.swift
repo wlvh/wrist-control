@@ -22,6 +22,9 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let outputLabel = NSTextField(labelWithString: "滚轮已暂停")
     private var pauseButton: NSButton!
     private lazy var wheel = SystemWheel(journal: bluetooth.journal)
+    private lazy var pointer = PointerCoordinator(journal: bluetooth.journal)
+    private lazy var nativePointer = SystemPointer(journal: bluetooth.journal)
+    private let geometry = DisplayGeometry()
     private let diagnosticsLabel = NSTextField(wrappingLabelWithString: "")
     private var diagnosticsVisible = false
     private var observers: [NSObjectProtocol] = []
@@ -33,15 +36,51 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
         bluetooth.journal.record("pair_key_load", detail: "status=\(keyStatus)")
         bluetooth.controlState = { [weak self] in self?.wheel.state() ?? [] }
         bluetooth.onStatus = { [weak self] in self?.statusLabel.stringValue = $0 }
-        bluetooth.onScroll = { [weak self] in self?.wheel.post(points: $0) ?? false }
-        bluetooth.onResetOutput = { [weak self] in self?.wheel.reset() }
+        pointer.allowed = { [weak self] in
+            guard let self else { return false }
+            return self.bluetooth.identityVerified && self.wheel.state().canScroll
+        }
+        nativePointer.eligible = { [weak self] in
+            guard let self else { return false }
+            return self.pointer.scope == .system && self.bluetooth.identityVerified && self.wheel.state().canScroll
+        }
+        wheel.authority = { [weak self] in
+            guard let self else { return false }
+            return self.pointer.scope == .system && self.bluetooth.identityVerified
+        }
+        pointer.cursor = { [weak self] in self?.nativePointer.cursor() ?? .zero }
+        pointer.screenAt = { [weak self] in self?.geometry.screen(at: $0) }
+        pointer.onMove = { [weak self] point, scope in
+            guard let self, scope == .system else { return false }
+            return self.nativePointer.move(to: point)
+        }
+        pointer.onClick = { [weak self] request, session, point, now, scope in
+            guard let self, scope == .system else { return false }
+            return self.nativePointer.click(request, session: session, at: point, now: now)
+        }
+        pointer.onWheel = { [weak self] points, scope in
+            guard let self, scope == .system else { return false }
+            return self.wheel.post(points: points)
+        }
+        pointer.onBreakClickPair = { [weak self] in self?.nativePointer.breakClickPair() }
+        bluetooth.onPointerAction = { [weak self] wire, time in self?.pointer.handle(wire, now: time) ?? false }
+        bluetooth.onSession = { [weak self] session, enabled in
+            self?.pointer.newSession(session, enabled: enabled); self?.nativePointer.reset(session: session)
+        }
+        bluetooth.pointerState = { [weak self] in
+            guard let p = self?.pointer else { return (0, .paused, .a, .system) }
+            return (p.lease.cycle, p.lease.phase, p.mode, p.scope)
+        }
+        bluetooth.onTick = { [weak self] in self?.pointer.tick(now: $0) }
+        bluetooth.onResetOutput = { [weak self] in self?.wheel.reset(); self?.pointer.freeze(reason: "transport_boundary") }
         wheel.onEligibilityLost = { [weak self] in self?.bluetooth.targetDidChange("output_eligibility_lost") }
         bluetooth.onSetEnabled = { [weak self] in self?.wheel.setEnabled($0) }
         bluetooth.onExport = { [weak self] in self?.saveDiagnostics(watch: $0, reason: $1) }
         observeLifecycle()
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         bluetooth.start()
-        uiTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.refreshDiagnostics() }
+        let pulse = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.refreshDiagnostics() }
+        RunLoop.main.add(pulse, forMode: .common); uiTimer = pulse
     }
 
     private func createMenu() {
@@ -57,7 +96,7 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func createWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 780),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "腕控 · 通用滚轮"; window.minSize = NSSize(width: 650, height: 500)
+        window.title = "腕控 0.3 · A 指针与通用滚轮"; window.minSize = NSSize(width: 650, height: 500)
         window.center(); window.delegate = self; window.isReleasedWhenClosed = false
         let container = NSStackView(); container.orientation = .vertical; container.alignment = .leading
         container.spacing = 12; container.edgeInsets = NSEdgeInsets(top: 22, left: 28, bottom: 18, right: 28)
@@ -71,13 +110,13 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
         container.addArrangedSubview(title)
         statusLabel.font = .systemFont(ofSize: 13); statusLabel.textColor = .secondaryLabelColor
         container.addArrangedSubview(statusLabel)
-        let hint = NSTextField(wrappingLabelWithString: "把鼠标留在需要滚动的区域，表冠就像普通鼠标滚轮。腕控窗口可以最小化；手表按钮可暂停／继续。")
+        let hint = NSTextField(wrappingLabelWithString: "手表点“开启移动”，停稳片刻，再转动手腕。点左击／右击或转表冠会冻结移动；左击连点两次是双击。手表上的“暂停腕控”暂停全部输入。")
         hint.font = .systemFont(ofSize: 12); hint.textColor = .secondaryLabelColor
         container.addArrangedSubview(hint)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 18
-        pauseButton = NSButton(title: "继续滚轮", target: self, action: #selector(toggleControl))
+        pauseButton = NSButton(title: "继续腕控", target: self, action: #selector(toggleControl))
         row.addArrangedSubview(pauseButton)
-        row.addArrangedSubview(NSButton(title: "允许滚轮权限", target: self, action: #selector(requestPermission)))
+        row.addArrangedSubview(NSButton(title: "允许输入权限", target: self, action: #selector(requestPermission)))
         let export = NSButton(title: "导出诊断", target: self, action: #selector(exportDiagnostics))
         row.addArrangedSubview(export)
         row.addArrangedSubview(NSButton(title: "展开诊断", target: self, action: #selector(toggleDiagnostics(_:))))
@@ -115,10 +154,10 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func refreshDiagnostics() {
         let state = wheel.state()
-        pauseButton.title = wheel.enabled ? "暂停滚轮" : "继续滚轮"
+        pauseButton.title = wheel.enabled ? "暂停腕控" : "继续腕控"
         if !state.contains(.permission) { outputLabel.stringValue = "需要在系统设置 → 隐私与安全性 → 辅助功能中允许腕控。" }
         else if !state.contains(.interactive) { outputLabel.stringValue = "电脑不可交互，或设备密钥不可用；系统输出已停止。" }
-        else { outputLabel.stringValue = wheel.enabled ? "滚轮已启用 · 鼠标位置决定接收区域" : "滚轮已暂停 · 点继续或使用手表按钮" }
+        else { outputLabel.stringValue = "A 转向跟手 · 移动：\(pointer.lease.phase) · 整个腕控：\(wheel.enabled ? "启用" : "暂停") · build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") ?? "?")" }
         diagnosticsLabel.stringValue = "处理 \(bluetooth.acceptedCount) · 拒绝 \(bluetooth.rejectedCount) · 系统发送 \(wheel.postedCount) · 本窗口位置 \(Int(scroll.contentView.bounds.minY)) pt\n设备认证：\(bluetooth.identityVerified ? "通过" : "未通过") / 资格：\(state.rawValue) / 钥匙串状态：\(wheel.lastKeyStatus)\n日志中的发送成功不代表目标窗口已滚动；设备时钟不能直接相减。"
     }
 
@@ -158,6 +197,12 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func observeLifecycle() {
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.geometry.invalidate(); self.pointer.freeze(reason: "display_layout_changed")
+            self.pointer.invalidateCalibration("display_layout_changed")
+        })
         let workspace = NSWorkspace.shared.notificationCenter
         let changes: [(Notification.Name, (SystemWheel) -> Void)] = [
             (NSWorkspace.willSleepNotification, { $0.awake = false }),

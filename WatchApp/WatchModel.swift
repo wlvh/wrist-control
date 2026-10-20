@@ -13,11 +13,45 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     @Published var crownPosition = 0.0
     @Published var focusGeneration = 0
     @Published var inputText = "等待连接"
+    @Published private var intentState = WatchIntentState()
+    var phase: PointerPhase {
+        get { intentState.phase }
+        set { intentState.phase = newValue }
+    }
+    @Published var mode: PointerMode = .a
+    @Published var settingsOpen = false
+    @Published var doubleClickInterval = 0.5
+    @Published var motionAvailable = false
+    private let motion = WatchMotion()
+    private var scope: OutputScope = .system
+    private var intentCycle: UInt32 {
+        get { intentState.cycle }
+        set { intentState.cycle = newValue }
+    }
+    private var confirmedCycle: UInt32 = 0
+    private var confirmedPhase: PointerPhase = .paused
+    private var clickID: UInt64 = 0
+    private var lastSentSample: UInt32 = 0
+    private var lastSentReference: UInt64 = 0
+    private var poseTransmits = 0
+    private var lastPoseSentAt = 0.0
+    private var lastStatistics = 0.0
+    private struct PendingAction {
+        let kind: MessageKind
+        let value: Int32
+        let cycle: UInt32
+        let click: ClickRequest?
+        let generatedAt: Double
+    }
+    private var pendingActions: [PendingAction] = []
     let journal = Journal(source: "watch")
     private var link: AuthenticatedLink?
     private var hello: Frame?
     private var pendingProof: Data?
-    private var desiredControl: Bool?
+    private var desiredControl: Bool? {
+        get { intentState.desiredControl }
+        set { intentState.desiredControl = newValue }
+    }
     private var manager: CBCentralManager?
     private var peripheral: CBPeripheral?
     private var input: CBCharacteristic?
@@ -49,7 +83,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
 
     override init() {
         super.init()
-        journal.record("app_launch", detail: "system_wheel_v2;foreground_only")
+        journal.record("app_launch", detail: "pointer_v3;foreground_only;sample50_send30")
         journal.persist()
         let keyStatus = PairingKeyStore.importBootstrapIfPresent()
         journal.record("pair_key_load", detail: "key_status=\(keyStatus)")
@@ -63,10 +97,12 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         clearIntent(); delta.rebase(to: crownPosition)
         if value {
             if manager == nil { manager = CBCentralManager(delegate: self, queue: .main) }
-            timer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in self?.tick() }
+            motion.start(); motionAvailable = motion.available
+            let pulse = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }
+            RunLoop.main.add(pulse, forMode: .common); timer = pulse
             scanIfPossible()
         } else {
-            timer?.invalidate(); timer = nil; manager?.stopScan()
+            timer?.invalidate(); timer = nil; manager?.stopScan(); motion.stop()
             invalidateConnection(reason: "app_policy_disconnect_nonactive")
             statusText = "待唤醒后重新连接"; journal.persist()
         }
@@ -83,10 +119,24 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         guard let amount = delta.update(position) else {
             journal.record("crown_dropped", detail: "baseline_or_discontinuity"); return
         }
-        guard active, focused, isReady, exportData == nil else {
+        guard active, focused, !settingsOpen, isReady, exportData == nil else {
             journal.record("crown_dropped", detail: "input_not_eligible"); return
         }
-        guard let fixed = mapping.convert(delta: amount), fixed != 0 else { return }
+        guard amount != 0 else { return }
+        // First real Crown intent closes the movement cycle even if its fractional
+        // wheel amount has not yet produced a fixed-point unit.
+        let fixed = mapping.convert(delta: amount) ?? 0
+        if phase == .moving || phase == .preparing {
+            guard let cycle = nextCycle() else { return }
+            phase = .reading; pendingActions.removeAll()
+            // A nonzero wheel packet carries the barrier itself. No extra
+            // stop/ACK round trip delays the first wheel movement.
+            if fixed == 0 {
+                pendingActions.append(PendingAction(kind: .stopMovement, value: 0, cycle: cycle, click: nil, generatedAt: now))
+                flushIntent()
+            }
+        }
+        guard fixed != 0 else { return }
         journal.record("crown_generated", detail: "coordinate=\(position);delta=\(amount);fixed=\(fixed)")
         inputText = amount > 0 ? "向下阅读" : "向上阅读"
         idlePending = false; buffer.add(fixed, now: now); flushIntent()
@@ -102,12 +152,78 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     func toggleControl() {
         guard canToggle, active, exportData == nil else { return }
         desiredControl = !controlEnabled
+        phase = desiredControl == true ? .reading : .paused
+        pendingActions.removeAll()
         buffer.clear(); mapping.reset(); idlePending = false; isReady = false; canToggle = false
         inputText = "等待电脑确认"
         flushIntent()
     }
 
+    private func nextCycle() -> UInt32? {
+        let previous = max(intentCycle, confirmedCycle)
+        guard previous < UInt32.max else { reconnect("cycle_exhausted"); return nil }
+        intentCycle = previous + 1; return intentCycle
+    }
+
+    func toggleMovement() {
+        guard active, isReady, !settingsOpen, exportData == nil else { return }
+        if phase == .moving || phase == .preparing { stopMovement(reason: "button"); return }
+        guard motionAvailable, let cycle = nextCycle() else { return }
+        buffer.clear(); pendingActions.removeAll(); phase = .preparing
+        pendingActions.append(PendingAction(kind: .startMovement, value: 0, cycle: cycle, click: nil, generatedAt: now))
+        inputText = "手腕停稳片刻"; journal.record("movement_toggle", detail: "request_start;cycle=\(cycle)")
+        flushIntent()
+    }
+
+    func stopMovement(reason: String) {
+        guard session != 0, let cycle = nextCycle() else { return }
+        phase = .reading; pendingActions.removeAll(); buffer.clear()
+        pendingActions.append(PendingAction(kind: .stopMovement, value: 0, cycle: cycle, click: nil, generatedAt: now))
+        journal.record("movement_toggle", detail: "stop;cycle=\(cycle);reason=\(reason)")
+        flushIntent()
+    }
+
+    func click(_ button: PointerButton) {
+        guard active, isReady, !settingsOpen, exportData == nil, clickID < UInt64.max,
+              let cycle = nextCycle() else { return }
+        phase = .reading; buffer.clear(); idlePending = false
+        pendingActions.removeAll { $0.kind != .leftClick && $0.kind != .rightClick }
+        guard pendingActions.count < 2 else { stopMovement(reason: "click_queue_full"); return }
+        clickID += 1
+        let request = ClickRequest(id: clickID, button: button, watchTime: now, cycle: cycle)
+        pendingActions.append(PendingAction(kind: button == .left ? .leftClick : .rightClick, value: 0,
+                                           cycle: cycle, click: request, generatedAt: now))
+        inputText = button == .left ? "左击 · 移动已冻结" : "右击 · 移动已冻结"
+        journal.record("click_generated", detail: "request=\(request.id);cycle=\(cycle)")
+        flushIntent()
+    }
+
+    func setSettings(_ open: Bool) {
+        settingsOpen = open; delta.rebase(to: crownPosition); buffer.clear(); mapping.reset()
+        guard session != 0, let cycle = nextCycle() else { return }
+        phase = controlEnabled ? .reading : .paused
+        if open { pendingActions.removeAll() }
+        pendingActions.append(PendingAction(kind: .mainPage, value: open ? 0 : 1, cycle: cycle, click: nil, generatedAt: now))
+        focusGeneration += 1; flushIntent()
+    }
+
+    func selectMode(_ value: PointerMode) {
+        guard session != 0, let cycle = nextCycle() else { return }
+        phase = controlEnabled ? .reading : .paused; pendingActions.removeAll { $0.kind != .mainPage }; buffer.clear()
+        pendingActions.append(PendingAction(kind: .setMode, value: Int32(value.rawValue), cycle: cycle, click: nil, generatedAt: now))
+        flushIntent()
+    }
+
+    func setSensitivity(_ value: Int) {
+        guard session != 0, let cycle = nextCycle() else { return }
+        pendingActions.removeAll { ![.mainPage, .setMode].contains($0.kind) }; buffer.clear(); phase = .reading
+        pendingActions.append(PendingAction(kind: .setSensitivity, value: Int32(value), cycle: cycle, click: nil, generatedAt: now))
+        flushIntent()
+    }
+
     private func clearIntent() {
+        phase = .paused; pendingActions.removeAll(); intentCycle = 0; confirmedCycle = 0; confirmedPhase = .paused
+        clickID = 0; lastSentSample = 0; lastSentReference = 0
         isReady = false; canToggle = false; desiredControl = nil; buffer.clear(); mapping.reset(); idlePending = false
         delta.rebase(to: crownPosition); awaitingAck = nil
     }
@@ -135,6 +251,12 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     private func tick() {
         guard active else { return }
         scanIfPossible()
+        motion.start() // restarts only if the system wrist/crown setting changed
+        if now - lastStatistics >= 1 {
+            let counts = motion.statistics()
+            journal.record("motion_transport_window", detail: "seconds=\(now-lastStatistics);samples=\(counts.samples);invalid=\(counts.invalid);pose_transmit=\(poseTransmits)")
+            lastStatistics = now; poseTransmits = 0
+        }
         if exportData != nil {
             if now - lastExportProgress > 6 { reconnect("diagnostic_write_timeout") }
             return
@@ -159,27 +281,66 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     private func flushIntent() {
         guard active, link != nil, session != 0, exportData == nil, writeInFlight == nil, awaitingAck == nil else { return }
         if let enabled = desiredControl { sendAction(.setControl, value: enabled ? 1 : 0); return }
-        guard focused, isReady else { return }
-        if let amount = buffer.take(now: now) { sendAction(.scroll, value: amount) }
+        while !pendingActions.isEmpty {
+            let pending = pendingActions.removeFirst()
+            // Reliable does not mean replay indefinitely; only stop/page changes
+            // can outlive the short user-action queue.
+            if now - pending.generatedAt > (pending.click == nil ? 0.35 : 0.15),
+               ![.stopMovement, .mainPage].contains(pending.kind) {
+                journal.record("queued_action_expired", detail: String(describing: pending.kind))
+                phase = .reading; continue
+            }
+            sendAction(pending.kind, value: pending.value, cycle: pending.cycle, click: pending.click,
+                       age: now - pending.generatedAt); return
+        }
+        guard focused, isReady, !settingsOpen else { return }
+        if let amount = buffer.take(now: now) { sendAction(.scroll, value: amount, cycle: intentCycle) }
         else if idlePending { idlePending = false; sendAction(.idle) }
+        else { sendPoseIfPossible() }
     }
 
-    private func sendAction(_ kind: MessageKind, value: Int32 = 0) {
+    private func sendAction(_ kind: MessageKind, value: Int32 = 0, cycle: UInt32 = 0,
+                            click: ClickRequest? = nil, age: Double = 0) {
         guard sequence < UInt32.max else { reconnect("sequence_exhausted"); return }
         sequence += 1
         let frame = Frame(kind, session: session, sequence: sequence, value: value, ticket: ticket)
-        awaitingAck = frame; write(frame)
+        let wire = PointerWire(frame: frame, cycle: cycle, click: click, sourceAge: age)
+        awaitingAck = wire.frame; write(wire.frame, payload: wire.data)
     }
 
-    private func write(_ frame: Frame, handshake: Data? = nil) {
+    private func sendPoseIfPossible() {
+        let observing = scope == .calibration || scope == .blindValidation
+        guard observing || (intentCycle == confirmedCycle && (confirmedPhase == .preparing || confirmedPhase == .moving)
+                            && (phase == .preparing || phase == .moving)),
+              let sample = motion.latest(), (sample.referenceID != lastSentReference || sample.sequence > lastSentSample),
+              now - lastPoseSentAt >= 1.0 / 30,
+              now >= sample.watchTime, now - sample.watchTime <= MotionLimits.maxSampleAge,
+              let peripheral, let input, peripheral.canSendWriteWithoutResponse,
+              input.properties.contains(.writeWithoutResponse) else { return }
+        guard sequence < UInt32.max else { reconnect("sequence_exhausted"); return }
+        sequence += 1
+        let frame = Frame(.pose, session: session, sequence: sequence, ticket: ticket)
+        let body = PointerWire(frame: frame, cycle: max(1, intentCycle), sample: sample, sourceAge: now-sample.watchTime).data
+        guard body.count == PointerWire.posePayloadSize, let packet = link?.seal(body, purpose: .input) else { return }
+        // One characteristic, one serialization order and authentication counter.
+        // Only replace unsent absolute snapshots; Crown deltas use ScrollBuffer.
+        peripheral.writeValue(packet, for: input, type: .withoutResponse)
+        lastSentSample = sample.sequence; lastSentReference = sample.referenceID; lastPoseSentAt = now; poseTransmits += 1
+    }
+
+    private func write(_ frame: Frame, handshake: Data? = nil, payload: Data? = nil) {
         guard let peripheral, let input,
-              peripheral.maximumWriteValueLength(for: .withoutResponse) >= AuthenticatedLink.frameSize,
-              let packet = handshake ?? link?.seal(frame.data, purpose: .input) else {
+              peripheral.maximumWriteValueLength(for: .withoutResponse) >= PointerWire.maximumInputSize,
+              let packet = handshake ?? link?.seal(payload ?? frame.data, purpose: .input) else {
             reconnect("missing_input_key_or_small_mtu"); return
         }
         writeInFlight = frame; sentAt = now
         journal.record("transmit", frame: frame, detail: "kind=\(frame.kind);value=\(frame.value)")
         peripheral.writeValue(packet, for: input, type: .withResponse)
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard peripheral === self.peripheral else { return }; flushIntent()
     }
 
     private func sendProofIfPossible() {
@@ -264,11 +425,13 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
             pendingProof = PairAuthentication.proofPacket(secret: secret, hello: hello, challenge: challenge)
             self.hello = nil; sendProofIfPossible(); return
         }
-        guard let payload = link?.open(data, purpose: .status), let frame = Frame(data: payload) else {
+        guard let payload = link?.open(data, purpose: .status),
+              let frame = Frame(data: payload.prefix(Frame.size)) else {
             journal.record("status_authentication_or_replay_rejected"); return
         }
         switch frame.kind {
         case .ready, .exportRequest:
+            guard let pointerStatus = PointerStatus(data: payload) else { reconnect("invalid_pointer_status"); return }
             guard frame.session != 0 else { reconnect("zero_session"); return }
             lastStatus = now; ticket = frame.ticket
             if frame.session != session {
@@ -287,6 +450,9 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
                 }
                 sendDiagnosticChunk(); return
             }
+            confirmedCycle = pointerStatus.cycle; confirmedPhase = pointerStatus.phase
+            scope = pointerStatus.scope; mode = pointerStatus.mode; doubleClickInterval = pointerStatus.doubleClickInterval
+            intentState.confirm(cycle: confirmedCycle, phase: confirmedPhase)
             let state = ControlState(rawValue: frame.value)
             controlEnabled = state.contains(.enabled); canToggle = desiredControl == nil
             let ready = state.canScroll && desiredControl == nil
@@ -297,7 +463,10 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
             }
             if !state.contains(.permission) { statusText = "请在电脑允许滚轮权限" }
             else if !state.contains(.interactive) { statusText = "电脑锁定或暂不可用" }
-            else { statusText = ready ? "滚动鼠标所在区域" : "已暂停" }
+            else if scope == .calibration { statusText = "标定中 · 只看电脑目标" }
+            else if scope == .blindValidation { statusText = "独立指向验证" }
+            else { statusText = ready ? (phase == .moving ? "手腕移动中" : phase == .preparing ? "请停稳手腕" : "滚轮和点击可用") : "整个腕控已暂停" }
+            flushIntent()
         case .ack:
             guard frame.session == session, let pending = awaitingAck, frame.acknowledges(pending) else { return }
             journal.record("application_ack", frame: frame, detail: "round_trip_ms=\((now - sentAt) * 1000);not_one_way_latency")
@@ -306,7 +475,9 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         case .rejected:
             guard frame.session == session, let pending = awaitingAck, frame.acknowledges(pending) else { return }
             journal.record("action_rejected", frame: frame)
-            buffer.clear(); awaitingAck = nil; desiredControl = nil; inputText = "本次未执行，请重试"
+            buffer.clear(); awaitingAck = nil
+            intentState.reject(kind: pending.kind, actionCycle: UInt32(bitPattern: pending.value), controlEnabled: controlEnabled)
+            inputText = "本次未执行，请重试"
             if let status { candidate.readValue(for: status) }
         default: reconnect("unexpected_status_kind")
         }
