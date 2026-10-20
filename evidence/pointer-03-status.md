@@ -10,8 +10,9 @@
 | G1 签名 | Mac/Watch build 3 正常开发签名构建与严格校验通过；原证书、bundle ID、访问组保留，描述文件续签到 2026-10-27 UTC |
 | G1 安装 | `/Applications/WristControl.app` 与原来的真实 Watch 均安装 0.3.0 build 3；两端无调试器启动成功 |
 | G1 真实输入 | **未通过**。使用者报告反复连接／中断／发现。未获得 A 移动、点击、停止或互点通过反馈 |
-| G2 软件 | 同一分支已接入四模式、参数保存、标定、隔离练习、盲指、版本记录；build 4 待签名安装。最终源码 SHA 与安装回执在 PR 中记录 |
-| G2 自动检查 | 当前 `swift test --scratch-path build/root-tests`：103 tests / 9 suites passed；两 native scheme 无签名编译通过。最终签名时仍须绑定提交 SHA |
+| G2 软件 | 同一分支已接入四模式、参数保存、标定、隔离练习、盲指、版本记录；0.3.0 build 4 绑定源码 `bb2ad65df5dc4d709397d418e350b7ee423f2151` |
+| G2 自动检查 | `swift test --scratch-path build/root-tests`：103 tests / 9 suites passed；两个 native scheme 编译和签名构建通过，两个安装包的严格签名校验通过 |
+| G2 安装 | Mac 固定安装路径和原物理 Watch 均已覆盖安装 build 4；Watch profile 确认包含目标。Mac 已无调试器启动，Watch 首次远程启动遇到开发连接超时，应用运行与连接结果另行核验 |
 | 四模式比较 | 没有真实成绩，不预选默认模式；D 训练残差、独立盲指、看着光标修正和姿势扰动不得混写 |
 
 本机核对：macOS 27.0.1 (26A434)、Xcode 27.1 (27A9275)、Swift 6.4；原物理 Watch 运行 watchOS 27.0.1，开发者模式已开启。操作中未升级系统，也未重置钥匙串。
@@ -25,6 +26,8 @@
 5. 本机 Xcode 27.1 的 Window 菜单没有 Device Hub；实际独立入口是 `/Applications/Xcode.app/Contents/Applications/DeviceHub.app`。旧菜单指引已纠正，见[设备互联记录](../docs/device-connection-notes.md)。
 
 原始日志、设备标识、profile、签名选择与配对材料均位于忽略的私有目录。公开报告不附原始身份或轨迹。
+
+build 4 的签名等待后来返回成功，两个构建日志均为 `BUILD SUCCEEDED`，产物版本／源码标记与严格签名校验一致；没有因此新建证书、私钥或配对密钥。安装成功不能替代启动或 BLE 成功。另已从原 `253ff29` 归档源码，在当前 Xcode 分别完成 0.2 Mac／Watch 无签名构建，验证回退源码仍可编译；尚未重新签名或安装该回退构建。
 
 ## 软件审查和自动检查覆盖
 
