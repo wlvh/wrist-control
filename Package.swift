@@ -8,8 +8,8 @@ let package = Package(
     targets: [
         .target(name: "WristCore", path: "Shared/Sources/WristCore"),
         .target(name: "WristMacOutput", dependencies: ["WristCore"], path: "MacApp",
-                exclude: ["App.swift", "MacBluetooth.swift", "Article.swift"],
-                sources: ["SystemWheel.swift", "SystemPointer.swift", "DisplayGeometry.swift", "PointerCoordinator.swift", "CalibrationWindow.swift", "PracticeWindow.swift"]),
+                exclude: ["App.swift", "Article.swift"],
+                sources: ["SystemWheel.swift", "SystemPointer.swift", "DisplayGeometry.swift", "PointerCoordinator.swift", "MacBluetooth.swift", "CalibrationWindow.swift", "PracticeWindow.swift"]),
         .testTarget(name: "WristCoreTests", dependencies: ["WristCore", "WristMacOutput"], path: "Tests/WristCoreTests")
     ]
 )

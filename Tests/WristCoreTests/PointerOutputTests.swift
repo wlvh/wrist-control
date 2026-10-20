@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import WristCore
 @testable import WristMacOutput
@@ -6,6 +7,135 @@ import Testing
 /// capture submissions or supply environmental state; they do not remap motion
 /// or implement a replacement click state machine. No native events are posted.
 struct PointerOutputTests {
+    @Test func relativeDeltasAccumulateEvenBeforeTheSystemCursorReflectsPostedEvents() throws {
+        let value = coordinator()
+        var posted: [PointerPoint] = []
+        // Deliberately keep cursor() unchanged, as can happen while WindowServer
+        // has not yet reflected a submitted CGEvent. Test the production route.
+        value.onMove = { point, _ in posted.append(point); return true }
+        try prepare(value)
+        #expect(value.handle(pose(sequence: 4, watch: 100.25, heading: 0.02), now: 10.25))
+        #expect(value.handle(pose(sequence: 5, watch: 100.29, heading: 0.04), now: 10.29))
+        #expect(abs(posted[0].x - (point.x + 32)) < 1e-6)
+        #expect(abs(posted[1].x - (point.x + 64)) < 1e-6)
+        var clicked: PointerPoint?
+        value.onClick = { _, _, point, _, _ in clicked = point; return true }
+        #expect(value.handle(control(.leftClick, cycle: 2, click: request(1, watch: 100.3, cycle: 2)), now: 10.3))
+        #expect(clicked == posted.last)
+    }
+    @Test func firstPublishedLocalBoundaryStatusContainsFinalModeAndScope() {
+        let value = coordinator(), bluetooth = MacBluetooth()
+        var snapshots: [PointerStatus] = []
+        bluetooth.controlState = { .ready }
+        bluetooth.onSession = { session, enabled, preserve in
+            value.newSession(session, enabled: enabled, preserveCalibration: preserve)
+        }
+        bluetooth.pointerState = { (value.lease.cycle, value.lease.phase, value.mode, value.scope) }
+        bluetooth.onStatusSnapshot = { snapshots.append($0) }
+        bluetooth.intentBoundary("test_transaction") {
+            value.selectMode(.c); value.setScope(.practice, screen: screen)
+        }
+        #expect(snapshots.count == 1)
+        #expect(snapshots.first?.mode == .c && snapshots.first?.scope == .practice)
+        #expect(snapshots.first?.frame.session == value.lease.session)
+        #expect(!value.handle(control(.startMovement, cycle: 1, session: 42), now: 10))
+    }
+    @Test func newSessionPageSynchronizationRestoresMainPageWithoutReopeningMovement() {
+        let value = coordinator()
+        #expect(value.handle(control(.mainPage, cycle: 1, value: 0), now: 10))
+        value.newSession(43, enabled: true, preserveCalibration: true)
+        #expect(!value.mainPage)
+        #expect(value.handle(control(.mainPage, cycle: 1, session: 43, value: 1), now: 10.1))
+        #expect(value.mainPage && value.lease.phase == .reading)
+        #expect(value.handle(control(.startMovement, cycle: 2, session: 43), now: 10.2))
+    }
+    @Test func dUsesItsCalibratedDisplayWhenOrdinaryMouseIsOnAnotherDisplay() throws {
+        let fixture = PointingCalibrationTests()
+        let model = try PointingCalibration.fit(observations: fixture.observations(), screen: fixture.screen)
+        let value = coordinator()
+        value.installCalibration(model); value.selectMode(.d)
+        value.cursor = { PointerPoint(x: 200, y: 200) }
+        value.screenAt = { point in point.x < 0 ? fixture.screen : screen }
+        var output: [PointerPoint] = []
+        value.onMove = { point, _ in output.append(point); return true }
+        #expect(value.handle(control(.startMovement, cycle: 1), now: 10))
+        for (index, offset) in [0.13, 0.17, 0.21].enumerated() {
+            #expect(value.handle(pose(sequence: UInt32(index+1), watch: 100+offset, reference: 7), now: 10+offset))
+        }
+        #expect(value.lease.phase == .moving && value.calibration?.calibrationID == model.calibrationID)
+        #expect(output.count == 1 && output[0].x < 0)
+    }
+    @Test func firstPoseAfterPreservedSessionMustStillMatchTheCalibrationReference() throws {
+        let fixture = PointingCalibrationTests(), value = coordinator()
+        value.installCalibration(try PointingCalibration.fit(observations: fixture.observations(), screen: fixture.screen))
+        value.newSession(43, enabled: true, preserveCalibration: true)
+        value.setScope(.blindValidation, screen: fixture.screen)
+        var forwarded = 0; value.onSample = { _, _ in forwarded += 1 }
+        #expect(!value.handle(pose(sequence: 1, watch: 1, session: 43, reference: 8), now: 10))
+        #expect(value.calibration == nil && forwarded == 0)
+    }
+    @Test func localSessionBoundaryRejectsAnInFlightStartWithoutDiscardingValidDCalibration() throws {
+        let fixture = PointingCalibrationTests()
+        let model = try PointingCalibration.fit(observations: fixture.observations(), screen: fixture.screen)
+        let value = coordinator()
+        value.installCalibration(model)
+        let inFlight = control(.startMovement, cycle: 1)
+        value.newSession(43, enabled: true, preserveCalibration: true)
+        value.selectMode(.b)
+        #expect(!value.handle(inFlight, now: 10))
+        #expect(value.lease.phase == .reading && value.calibration?.calibrationID == model.calibrationID)
+        value.newSession(44, enabled: true)
+        #expect(value.calibration == nil)
+    }
+    @Test func referenceChangeInvalidatesInstalledDModelWhileObserving() throws {
+        let fixture = PointingCalibrationTests()
+        let value = coordinator()
+        value.installCalibration(try PointingCalibration.fit(observations: fixture.observations(), screen: fixture.screen))
+        value.setScope(.blindValidation, screen: fixture.screen)
+        #expect(value.handle(pose(sequence: 1, watch: 1, reference: 7), now: 10))
+        #expect(!value.handle(pose(sequence: 2, watch: 1.04, reference: 8), now: 10.04))
+        #expect(value.calibration == nil && value.lease.phase == .reading)
+    }
+    @Test func closingAnInvalidIsolatedToolCannotTurnItsLateClickIntoASystemClick() {
+        let value = coordinator()
+        var systemClicks = 0
+        value.setScope(.blindValidation, screen: screen)
+        value.onClick = { _, _, _, _, scope in
+            if scope == .system { systemClicks += 1 }; return true
+        }
+        // This is the production App's callback ordering: close, renew logical
+        // session through Bluetooth, then change scope. No alternate gate model.
+        value.onInvalidation = { _ in
+            value.newSession(43, enabled: true, preserveCalibration: true)
+            value.setScope(.system)
+        }
+        #expect(value.handle(pose(sequence: 1, watch: 1, reference: 7), now: 10))
+        let late = control(.leftClick, cycle: 1, click: request(1, watch: 1.05, cycle: 1))
+        #expect(!value.handle(pose(sequence: 2, watch: 1.04, reference: 8), now: 10.04))
+        #expect(!value.handle(late, now: 10.06))
+        #expect(systemClicks == 0 && value.scope == .system && value.lease.session == 43)
+        #expect(value.latestSample == nil)
+    }
+    @Test func blindLeftClickOnlyLocksInsideTheIsolatedScopeAndNeverRoutesRightClick() {
+        let value = coordinator(); var scopes: [OutputScope] = []
+        value.setScope(.blindValidation, screen: screen)
+        value.onClick = { _, _, _, _, scope in scopes.append(scope); return true }
+        let left = control(.leftClick, cycle: 1, click: request(1, watch: 1, cycle: 1))
+        #expect(value.handle(left, now: 10)); #expect(!value.handle(left, now: 10.1))
+        #expect(!value.handle(control(.rightClick, cycle: 2, click: request(2, watch: 1.2, button: .right, cycle: 2)), now: 10.2))
+        #expect(scopes == [.blindValidation] && value.lease.phase == .reading)
+    }
+    @Test func independentModeParametersRoundTripAndInvalidSettingsDoNotReplaceThem() throws {
+        let value = coordinator(); var settings = PointerSettings()
+        settings.aGain = 800; settings.bGain = 2400
+        settings.joystick = JoystickParameters(maxScreenWidthsPerSecond: 0.5)
+        #expect(value.configure(settings))
+        let stored = try JSONEncoder().encode(value.settings)
+        #expect(try JSONDecoder().decode(PointerSettings.self, from: stored) == settings)
+        settings.aGain = .infinity
+        #expect(!value.configure(settings))
+        #expect(value.settings.aGain == 800 && value.settings.bGain == 2400)
+    }
     let point = PointerPoint(x: 200, y: 300)
     let screen = PointerScreen(displayID: 1, layoutID: 9, width: 800, height: 600, backingScale: 2)
     func request(_ id: UInt64, watch: Double, button: PointerButton = .left, cycle: UInt32 = 1) -> ClickRequest {

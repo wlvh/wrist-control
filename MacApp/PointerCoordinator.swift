@@ -21,24 +21,27 @@ final class PointerCoordinator {
     var onBreakClickPair: () -> Void = {}
     var onSample: (AttitudeSample, Double) -> Void = { _, _ in }
     var onInvalidation: (String) -> Void = { _ in }
+    var onSettings: (PointerSettings) -> Void = { _ in }
+    var onModeChange: (PointerMode) -> Void = { _ in }
     var onChange: () -> Void = {}
     let journal: Journal
     private var mapper: (any PointerMapping)?
     private var context: MappingContext?
     private var isolatedPoint = PointerPoint.zero
+    private var submittedPoint: PointerPoint?
     private var baseline: [AttitudeSample] = []
     private var startedAt = 0.0
     private var lastPoseAt = 0.0
-    private var gains: [PointerMode: Double] = [.a: 1600, .b: 1600]
+    private(set) var settings = PointerSettings()
     private var lastClick: UInt64 = 0
     private var observed: AttitudeSample?
     init(journal: Journal) { self.journal = journal }
 
-    func newSession(_ session: UInt64, enabled: Bool) {
+    func newSession(_ session: UInt64, enabled: Bool, preserveCalibration: Bool = false) {
         freeze(reason: "session_changed")
         lease.newSession(session, enabled: enabled); lastClick = 0
         latestSample = nil; observed = nil
-        invalidateCalibration("connection_or_eligibility_changed")
+        if !preserveCalibration { invalidateCalibration("connection_or_eligibility_changed") }
         onChange()
     }
     func invalidateCalibration(_ reason: String) {
@@ -47,6 +50,10 @@ final class PointerCoordinator {
         journal.record("calibration_invalidated", detail: reason)
     }
     func installCalibration(_ value: PointingCalibration) { calibration = value; onChange() }
+    @discardableResult func configure(_ value: PointerSettings) -> Bool {
+        guard value.isValid else { return false }
+        freeze(reason: "parameters_changed"); settings = value; onSettings(value); return true
+    }
     func setScope(_ value: OutputScope, screen: PointerScreen? = nil) {
         freeze(reason: "scope_changed"); scope = value; activeScreen = screen
         if let screen { isolatedPoint = screen.point(normalized: PointerPoint(x: 0.5, y: 0.5)) }
@@ -54,12 +61,15 @@ final class PointerCoordinator {
     }
     func selectMode(_ value: PointerMode) {
         freeze(reason: "mode_changed"); mode = value
+        onModeChange(value)
         journal.record("pointer_mode", detail: String(value.rawValue)); onChange()
     }
     @discardableResult func freeze(cycle: UInt32? = nil, reason: String, breakPair: Bool = true) -> Bool {
+        let wasMoving = lease.phase == .moving || lease.phase == .preparing
         guard lease.freeze(cycle: cycle) else { return false }
         mapper?.reset(); mapper = nil; context = nil; baseline = []
-        onFreeze()
+        submittedPoint = nil
+        if wasMoving || ["click", "explicit_stop", "crown"].contains(reason) { onFreeze() }
         if breakPair { onBreakClickPair() }
         journal.record("movement_frozen", detail: "cycle=\(lease.cycle);reason=\(reason)")
         onChange(); return true
@@ -68,7 +78,7 @@ final class PointerCoordinator {
         guard lease.phase == .moving || lease.phase == .preparing else { return }
         if !allowed() { freeze(reason: "eligibility_lost"); return }
         if (lease.phase == .moving && now - lastPoseAt > MotionLimits.streamTimeout)
-            || (lease.phase == .preparing && now - max(startedAt, lastPoseAt) > 0.5) {
+            || (lease.phase == .preparing && (now - max(startedAt, lastPoseAt) > 0.5 || now - startedAt > 3)) {
             freeze(reason: "pose_stream_timeout")
         }
     }
@@ -83,7 +93,9 @@ final class PointerCoordinator {
         case .setSensitivity:
             guard [.a, .b].contains(mode), (100...8000).contains(frame.value),
                   freeze(cycle: wire.cycle, reason: "gain_changed") else { return false }
-            gains[mode] = Double(frame.value); return true
+            var next = settings
+            if mode == .a { next.aGain = Double(frame.value) } else { next.bGain = Double(frame.value) }
+            return configure(next)
         case .mainPage:
             guard freeze(cycle: wire.cycle, reason: "watch_page_changed") else { return false }
             mainPage = frame.value == 1; return true
@@ -93,6 +105,7 @@ final class PointerCoordinator {
             guard allowed(), mainPage, scope != .calibration, scope != .blindValidation else { return false }
             guard lease.start(cycle: wire.cycle) else { return false }
             mapper?.reset(); mapper = nil; context = nil; baseline = []
+            submittedPoint = nil
             onBreakClickPair(); startedAt = now; lastPoseAt = now
             journal.record("movement_preparing", detail: "cycle=\(wire.cycle)")
             onChange(); return true
@@ -102,12 +115,14 @@ final class PointerCoordinator {
             guard let request = wire.click, request.id > lastClick, wire.sourceAge <= 0.15,
                   wire.cycle >= lease.cycle else { return false }
             lastClick = request.id // never retry even if eligibility changes below
+            let frozenPoint = scope == .system ? (submittedPoint ?? cursor()) : isolatedPoint
             guard freeze(cycle: wire.cycle, reason: "click", breakPair: false),
-                  allowed(), mainPage, scope != .calibration, scope != .blindValidation else { return false }
-            // Freeze point is the already-processed position at receipt. There is
-            // no wait for a last pose and no later motion can alter this request.
-            let point = scope == .system ? cursor() : isolatedPoint
-            return onClick(request, lease.session, point, now, scope)
+                  allowed(), mainPage, scope != .calibration else { return false }
+            guard scope != .blindValidation || request.button == .left else { return false }
+            // While moving, freeze the last accepted output target. While
+            // already frozen, use the real cursor (the user may have moved it).
+            // No wait for a future pose or window-server acknowledgement.
+            return onClick(request, lease.session, frozenPoint, now, scope)
         case .scroll:
             guard freeze(cycle: wire.cycle, reason: "crown"), mainPage, allowed() else { return false }
             return onWheel(LinearScroll.points(frame.value), scope)
@@ -121,10 +136,14 @@ final class PointerCoordinator {
               wire.sourceAge <= MotionLimits.maxSampleAge else {
             freeze(reason: "stale_or_invalid_pose"); return false
         }
+        if let model = calibration, !model.binding.matches(screen: model.binding.screen, sample: sample) {
+            freeze(reason: "calibration_context_changed")
+            invalidateCalibration("calibration_context_changed"); return false
+        }
         if let previous = observed {
             if sample.referenceID != previous.referenceID || sample.reference != previous.reference || sample.wear != previous.wear {
                 freeze(reason: "attitude_reference_changed"); invalidateCalibration("attitude_reference_or_wear_changed")
-                observed = sample; latestSample = sample; return false
+                return false // invalidation may synchronously replace the session
             }
             guard sample.sequence > previous.sequence, sample.watchTime > previous.watchTime else { return false }
         }
@@ -138,19 +157,33 @@ final class PointerCoordinator {
         if lease.phase == .preparing {
             guard now - startedAt >= 0.12 else { return true } // tap/gesture settling
             let point = scope == .system ? cursor() : isolatedPoint
-            guard let screen = scope == .system ? screenAt(point) : activeScreen else { freeze(reason: "display_unavailable"); return false }
+            let selected: PointerScreen?
+            if mode == .d, scope == .system {
+                guard let model = calibration else { freeze(reason: "calibration_required"); return false }
+                let bound = model.binding.screen
+                guard let current = screenAt(bound.point(normalized: PointerPoint(x: 0.5, y: 0.5))), current == bound else {
+                    freeze(reason: "calibrated_display_changed"); invalidateCalibration("calibrated_display_changed"); return false
+                }
+                selected = current
+            } else { selected = scope == .system ? screenAt(point) : activeScreen }
+            guard let screen = selected else { freeze(reason: "display_unavailable"); return false }
+            if mode == .d, let model = calibration, model.binding.screen != screen {
+                freeze(reason: "practice_requires_calibrated_display"); return false
+            }
             if let first = baseline.first, first.attitude.angularDistance(to: sample.attitude) > 0.015 {
                 baseline.removeAll(keepingCapacity: true)
             }
             baseline.append(sample)
+            if baseline.count > 8 { baseline.removeFirst() }
             guard let first = baseline.first, baseline.count >= 3, sample.watchTime - first.watchTime >= 0.06 else { return true }
             activeScreen = screen
+            submittedPoint = point
             let bound = MappingContext(session: lease.session, cycle: lease.cycle, screen: screen, sample: sample)
             context = bound
             switch mode {
-            case .a: mapper = HeadingFollowingMapping(gainX: gains[.a]!, gainY: gains[.a]!)
-            case .b: mapper = RollFollowingMapping(gainX: gains[.b]!, gainY: gains[.b]!)
-            case .c: mapper = TiltJoystickMapping()
+            case .a: mapper = HeadingFollowingMapping(gainX: settings.aGain, gainY: settings.aGain)
+            case .b: mapper = RollFollowingMapping(gainX: settings.bGain, gainY: settings.bGain)
+            case .c: mapper = TiltJoystickMapping(parameters: settings.joystick)
             case .d:
                 guard let calibration else { freeze(reason: "calibration_required"); return false }
                 mapper = DPointingMapping(calibration: calibration)
@@ -158,7 +191,7 @@ final class PointerCoordinator {
             let result = mapper!.begin(sample: sample, context: bound)
             if case .stop = result { return apply(result) }
             guard lease.confirmBaseline(cycle: wire.cycle) else { return false }
-            journal.record("movement_started", detail: "mode=\(mode.rawValue);cycle=\(wire.cycle)")
+            journal.record("movement_started", detail: "mode=\(mode.rawValue);cycle=\(wire.cycle);reference=\(sample.referenceID)")
             onChange()
             return apply(result)
         }
@@ -174,7 +207,7 @@ final class PointerCoordinator {
             return false
         case .relative(let delta):
             guard let screen = activeScreen else { return false }
-            let origin = scope == .system ? cursor() : isolatedPoint
+            let origin = scope == .system ? (submittedPoint ?? cursor()) : isolatedPoint
             return output(screen.clamp(origin + delta))
         case .absolute(let point):
             guard let screen = activeScreen else { return false }
@@ -183,6 +216,7 @@ final class PointerCoordinator {
     }
     private func output(_ point: PointerPoint) -> Bool {
         guard allowed(), lease.phase == .moving, onMove(point, scope) else { freeze(reason: "movement_output_rejected"); return false }
+        submittedPoint = point
         if scope != .system { isolatedPoint = point }
         return true
     }

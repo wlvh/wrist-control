@@ -3,6 +3,13 @@ import Testing
 @testable import WristCore
 
 struct PointerPracticeTests {
+    @Test func actualReferenceCanFillAnUnknownRunButCannotRelabelItLater() throws {
+        var value = try run()
+        let first = value.bindReference(88), repeated = value.bindReference(88), changed = value.bindReference(89)
+        #expect(first && repeated && !changed)
+        #expect(value.result.configuration.metadata.referenceID == 88)
+        #expect(value.result.configuration.source == .a && value.result.configuration.seed == 42)
+    }
     let screen = PointerScreen(displayID: 1, layoutID: 7, origin: PointerPoint(x: -1440, y: 80), width: 1440, height: 900, backingScale: 2)
     var region: PracticeRegion { PracticeRegion(origin: PointerPoint(x: -1400, y: 140), width: 1360, height: 760) }
     var target: PracticeTarget { PracticeTarget(id: 1, center: PointerPoint(x: -750, y: 400), diameter: 48) }

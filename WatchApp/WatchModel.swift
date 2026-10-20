@@ -22,6 +22,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     @Published var settingsOpen = false
     @Published var doubleClickInterval = 0.5
     @Published var motionAvailable = false
+    @Published var calibrationReady = false
     private let motion = WatchMotion()
     private var scope: OutputScope = .system
     private var intentCycle: UInt32 {
@@ -36,6 +37,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     private var poseTransmits = 0
     private var lastPoseSentAt = 0.0
     private var lastStatistics = 0.0
+    private var lastPersisted = 0.0
     private struct PendingAction {
         let kind: MessageKind
         let value: Int32
@@ -44,6 +46,8 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         let generatedAt: Double
     }
     private var pendingActions: [PendingAction] = []
+    private var clientInfoPending = true
+    private var pageSyncPending = true
     let journal = Journal(source: "watch")
     private var link: AuthenticatedLink?
     private var hello: Frame?
@@ -97,6 +101,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         clearIntent(); delta.rebase(to: crownPosition)
         if value {
             if manager == nil { manager = CBCentralManager(delegate: self, queue: .main) }
+            lastStatistics = now; poseTransmits = 0; _ = motion.statistics()
             motion.start(); motionAvailable = motion.available
             let pulse = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }
             RunLoop.main.add(pulse, forMode: .common); timer = pulse
@@ -224,6 +229,8 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     private func clearIntent() {
         phase = .paused; pendingActions.removeAll(); intentCycle = 0; confirmedCycle = 0; confirmedPhase = .paused
         clickID = 0; lastSentSample = 0; lastSentReference = 0
+        clientInfoPending = true
+        pageSyncPending = true
         isReady = false; canToggle = false; desiredControl = nil; buffer.clear(); mapping.reset(); idlePending = false
         delta.rebase(to: crownPosition); awaitingAck = nil
     }
@@ -256,6 +263,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
             let counts = motion.statistics()
             journal.record("motion_transport_window", detail: "seconds=\(now-lastStatistics);samples=\(counts.samples);invalid=\(counts.invalid);pose_transmit=\(poseTransmits)")
             lastStatistics = now; poseTransmits = 0
+            if now - lastPersisted >= 5 { journal.persist(); lastPersisted = now }
         }
         if exportData != nil {
             if now - lastExportProgress > 6 { reconnect("diagnostic_write_timeout") }
@@ -281,6 +289,19 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     private func flushIntent() {
         guard active, link != nil, session != 0, exportData == nil, writeInFlight == nil, awaitingAck == nil else { return }
         if let enabled = desiredControl { sendAction(.setControl, value: enabled ? 1 : 0); return }
+        if clientInfoPending {
+            clientInfoPending = false
+            if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+               let number = Int32(build), let revision = Bundle.main.object(forInfoDictionaryKey: "WristSourceRevision") as? String,
+               revision.utf8.count == 40 {
+                sendAction(.clientInfo, value: number, revision: revision); return
+            }
+        }
+        if pageSyncPending {
+            guard let cycle = nextCycle() else { return }
+            pageSyncPending = false
+            sendAction(.mainPage, value: settingsOpen ? 0 : 1, cycle: cycle); return
+        }
         while !pendingActions.isEmpty {
             let pending = pendingActions.removeFirst()
             // Reliable does not mean replay indefinitely; only stop/page changes
@@ -300,12 +321,18 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     }
 
     private func sendAction(_ kind: MessageKind, value: Int32 = 0, cycle: UInt32 = 0,
-                            click: ClickRequest? = nil, age: Double = 0) {
+                            click: ClickRequest? = nil, age: Double = 0, revision: String? = nil) {
         guard sequence < UInt32.max else { reconnect("sequence_exhausted"); return }
         sequence += 1
         let frame = Frame(kind, session: session, sequence: sequence, value: value, ticket: ticket)
-        let wire = PointerWire(frame: frame, cycle: cycle, click: click, sourceAge: age)
-        awaitingAck = wire.frame; write(wire.frame, payload: wire.data)
+        let wire = PointerWire(frame: frame, cycle: cycle, click: click, sourceAge: age, revision: revision)
+        let payload = wire.data
+        guard !payload.isEmpty else {
+            journal.record("invalid_local_packet", detail: String(describing: kind))
+            if kind != .clientInfo { reconnect("invalid_local_action") }
+            return
+        }
+        awaitingAck = wire.frame; write(wire.frame, payload: payload)
     }
 
     private func sendPoseIfPossible() {
@@ -375,7 +402,9 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect candidate: CBPeripheral, error: Error?) {
-        guard candidate === peripheral else { return }; reconnect("connect_failed")
+        guard candidate === peripheral else { return }
+        if let e = error as NSError? { journal.record("connect_error", detail: "domain=\(e.domain);code=\(e.code);\(e.localizedDescription)") }
+        reconnect("connect_failed")
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral candidate: CBPeripheral, error: Error?) {
@@ -452,10 +481,11 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
             }
             confirmedCycle = pointerStatus.cycle; confirmedPhase = pointerStatus.phase
             scope = pointerStatus.scope; mode = pointerStatus.mode; doubleClickInterval = pointerStatus.doubleClickInterval
+            calibrationReady = frame.value & 8 != 0
             intentState.confirm(cycle: confirmedCycle, phase: confirmedPhase)
             let state = ControlState(rawValue: frame.value)
             controlEnabled = state.contains(.enabled); canToggle = desiredControl == nil
-            let ready = state.canScroll && desiredControl == nil
+            let ready = state.canScroll && desiredControl == nil && !pageSyncPending && awaitingAck?.kind != .mainPage
             if ready != isReady {
                 buffer.clear(); mapping.reset(); delta.rebase(to: crownPosition)
                 isReady = ready; focusGeneration += 1
@@ -465,6 +495,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
             else if !state.contains(.interactive) { statusText = "电脑锁定或暂不可用" }
             else if scope == .calibration { statusText = "标定中 · 只看电脑目标" }
             else if scope == .blindValidation { statusText = "独立指向验证" }
+            else if ready, mode == .d, !calibrationReady { statusText = "D 待标定 · 滚轮点击可用" }
             else { statusText = ready ? (phase == .moving ? "手腕移动中" : phase == .preparing ? "请停稳手腕" : "滚轮和点击可用") : "整个腕控已暂停" }
             flushIntent()
         case .ack:
@@ -477,6 +508,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
             journal.record("action_rejected", frame: frame)
             buffer.clear(); awaitingAck = nil
             intentState.reject(kind: pending.kind, actionCycle: UInt32(bitPattern: pending.value), controlEnabled: controlEnabled)
+            if pending.kind == .mainPage { pageSyncPending = true }
             inputText = "本次未执行，请重试"
             if let status { candidate.readValue(for: status) }
         default: reconnect("unexpected_status_kind")
@@ -485,7 +517,10 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
 
     func peripheral(_ candidate: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         guard active, candidate === peripheral else { return }
-        guard error == nil else { reconnect("att_write_failed"); return }
+        guard error == nil else {
+            if let e = error as NSError? { journal.record("att_error", detail: "domain=\(e.domain);code=\(e.code);\(e.localizedDescription)") }
+            reconnect("att_write_failed"); return
+        }
         if characteristic.uuid == diagnostics?.uuid {
             exportWriting = false; lastExportProgress = now; sendDiagnosticChunk()
         } else if characteristic.uuid == input?.uuid {

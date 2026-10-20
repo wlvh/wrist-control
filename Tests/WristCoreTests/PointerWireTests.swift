@@ -3,6 +3,15 @@ import Testing
 @testable import WristCore
 
 struct PointerWireTests {
+    @Test func authenticatedClientBuildHasFixedValidatedRevisionBytes() throws {
+        let sha = String(repeating: "ab", count: 20)
+        let value = PointerWire(frame: Frame(.clientInfo, session: 1, sequence: 1, value: 4), revision: sha)
+        let decoded = try #require(PointerWire(data: value.data))
+        #expect(decoded.revision == sha && decoded.frame.value == 4 && value.data.count == 40)
+        for count in 0..<40 { #expect(PointerWire(data: value.data.prefix(count)) == nil) }
+        #expect(PointerWire(frame: value.frame, revision: String(repeating: "😀", count: 10)).data.isEmpty)
+        #expect(PointerWire(frame: value.frame, revision: String(repeating: "g", count: 40)).data.isEmpty)
+    }
     @Test func rejectedStopDoesNotEatPendingTotalPauseAndOldStatusCannotResumeIt() {
         var live = WatchIntentState(); live.cycle = 7; live.phase = .paused; live.desiredControl = false
         live.reject(kind: .stopMovement, actionCycle: 6, controlEnabled: true)

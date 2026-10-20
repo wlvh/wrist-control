@@ -67,9 +67,9 @@ public struct SessionGate {
     public mutating func accept(_ frame: Frame, now: TimeInterval, targetReady: Bool, maxAge: TimeInterval = Self.lifetime) -> String? {
         // Pause/resume must remain reachable while output is paused. Authentication
         // is checked by the transport before this gate is called.
-        guard targetReady || [.setControl, .stopMovement, .setMode, .setSensitivity, .mainPage].contains(frame.kind) else { return "target_unavailable" }
+        guard targetReady || [.setControl, .stopMovement, .setMode, .setSensitivity, .mainPage, .clientInfo].contains(frame.kind) else { return "target_unavailable" }
         guard session != 0, frame.session == session else { return "old_session" }
-        guard [.scroll, .idle, .setControl, .pose, .startMovement, .stopMovement, .setMode, .leftClick, .rightClick, .setSensitivity, .mainPage].contains(frame.kind) else { return "invalid_action" }
+        guard [.scroll, .idle, .setControl, .pose, .startMovement, .stopMovement, .setMode, .leftClick, .rightClick, .setSensitivity, .mainPage, .clientInfo].contains(frame.kind) else { return "invalid_action" }
         guard frame.sequence > lastSequence else { return "duplicate_or_reordered" }
         guard maxAge.isFinite, maxAge > 0, let issued = tickets[frame.ticket], now >= issued,
               now - issued <= min(maxAge, Self.lifetime) else { return "expired_ticket" }

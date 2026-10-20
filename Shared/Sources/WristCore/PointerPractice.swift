@@ -192,7 +192,18 @@ public struct PracticeRunResult: Codable, Sendable {
 /// This is the production scorekeeper used by the window and by tests. It never
 /// emits input. Every timestamp supplied here is from ONE Mac monotonic clock.
 public struct PointerPracticeRun {
-    public let configuration: PracticeConfiguration
+    public private(set) var configuration: PracticeConfiguration
+    /// Fill the initially unknown reference from the first actual sample. Later
+    /// reference changes cannot relabel a run already in progress.
+    @discardableResult public mutating func bindReference(_ identifier: UInt64) -> Bool {
+        guard identifier != 0 else { return false }
+        if let previous = configuration.metadata.referenceID { return previous == identifier }
+        let old = configuration
+        var metadata = old.metadata; metadata.referenceID = identifier
+        configuration = PracticeConfiguration(screen: old.screen, region: old.region, source: old.source,
+            stage: old.stage, seed: old.seed, sessionIndex: old.sessionIndex, timeoutSeconds: old.timeoutSeconds, metadata: metadata)
+        return true
+    }
     public let targets: [PracticeTarget]
     public private(set) var trials: [PracticeTrialResult] = []
     public private(set) var ignoredEvents = 0

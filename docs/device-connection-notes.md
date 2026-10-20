@@ -57,3 +57,12 @@ Xcode 的命令行报告 `No Accounts` 时，界面也显示未登录；设备�
 专用开发钥匙串后来处于锁定状态，构建停在 codesign，并不表示要重建证书。只读确认锁定状态后，由设备拥有者在系统窗口授权，原有证书和私钥继续完成签名。开发签名钥匙串与应用内设备密钥的数据保护钥匙串用途不同，诊断时需先分清是哪一种。
 
 “电脑窗口最小化”指点 Mac 腕控窗口左上角黄色按钮；“退出手表腕控回到表盘”则会使 Watch 应用进入非活动状态。这两件事对本实现不同：前者已经验证仍可滚动，后者按当前前台策略断开。测试说明需要直接指明是哪台设备，不能只说“退出”或“收起”。
+
+
+## 0.3 / Xcode 27.1 的设备入口核对
+
+2026-10-20 实机检查：Xcode 27.1 (27A9275) 的 Window 菜单没有 Device Hub。Device Hub 已作为 Xcode 内的独立应用存在，实际路径为 `/Applications/Xcode.app/Contents/Applications/DeviceHub.app`，bundle ID `com.apple.dt.Devices`，本机版本 27.1 (255.6.8.1)。可用 Finder 打开或执行 `open /Applications/Xcode.app/Contents/Applications/DeviceHub.app`。不要再沿用“Window → Device Hub”的旧路径指导使用者。
+
+本轮首次通用 Watch 构建虽签名成功，描述文件未包含目标手表，实际安装返回 0xe8008012；改为指定真实 UDID 的正常 Xcode 自动续签／注册后，文件包含目标并安装启动成功。UDID、profile、证书与原始日志不入仓库。
+
+本轮还区分出了两个后续故障：Mac 应用数据保护钥匙串返回 item-not-found，在新旧访问组相同的前提下从原私有安装材料恢复同一应用密钥；后来蓝牙系统仍报告 encryption failure / MIC failure。App 双向认证与系统蓝牙连接加密不是同一层；恢复应用密钥不能证明系统连接已经恢复。已获使用者明确授权，只重建该 Watch 与 Mac 的开发配对，未重置钥匙串或解除手表与 iPhone 的配对。修复结果待实际重新连接，不能提前写成成功经验。

@@ -9,9 +9,9 @@ final class PracticeWindowController: NSWindowController, NSWindowDelegate {
     var onClose: (() -> Void)?
     var onSelectMode: ((PointerMode) -> Void)?
     var onScopeChange: ((OutputScope) -> Void)?
-    var onStartMovement: (() -> Void)?
     var onFreezeMovement: (() -> Void)?
     var metadata = PracticeMetadata()
+    var metadataProvider: (() -> PracticeMetadata)?
     private(set) var regularResults: [PracticeRunResult] = []
     private(set) var blindResults: [BlindPracticeResult] = []
     let screen: PointerScreen
@@ -98,6 +98,21 @@ final class PracticeWindowController: NSWindowController, NSWindowDelegate {
         }
     }
     func freeze() { practice?.freeze(at: now) }
+    var acceptsWatchInput: Bool { active && source != .mouseReference }
+    func actualModeChanged(to mode: PointerMode) {
+        guard active, let expected = source.mode, expected != mode else { return }
+        stopRun()
+        sourcePicker.selectItem(at: Int(mode.rawValue) - 1)
+        status.stringValue = "模式已改变，原任务已中止并保留；请开始新的比较任务。"
+    }
+    func parametersDidChange() {
+        guard active else { return }
+        stopRun(); status.stringValue = "参数已改变，当前任务中止并保留；下一轮记录新参数。"
+    }
+    func selectBlindValidation() {
+        guard !active else { return }
+        kindPicker.selectItem(at: 2); sourcePicker.selectItem(at: 3); selectSource()
+    }
     func click(at point: PointerPoint, button: PointerButton, clickCount: Int) {
         if blind != nil {
             // A Watch left click can request the lock, but can never revise an
@@ -111,7 +126,11 @@ final class PracticeWindowController: NSWindowController, NSWindowDelegate {
         if practice?.trials.count != before { regularTrialEnded() }
     }
     func ingest(sample: AttitudeSample) {
-        guard collectingBlind, blind?.currentTarget != nil, let predictBlind else { return }
+        if practice != nil, practice?.bindReference(sample.referenceID) == false {
+            stopRun(); status.stringValue = "姿态参考已改变，本轮中止并保留。"; return
+        }
+        guard collectingBlind, let began = blindCollectionStart, now - began >= 0.15,
+              blind?.currentTarget != nil, let predictBlind else { return }
         do {
             guard let stable = try collector?.append(sample: sample, screen: screen) else { return }
             let prediction = try predictBlind(stable.meanSample, screen)
@@ -156,10 +175,11 @@ final class PracticeWindowController: NSWindowController, NSWindowDelegate {
         sourcePicker.addItems(withTitles: ["A 转向跟手", "B 翻转跟手", "C 倾斜摇杆", "D 指向定位", "鼠标 / 触控板参照"])
         sourcePicker.target = self; sourcePicker.action = #selector(selectSource)
         kindPicker.addItems(withTitles: ["练习（4 个）", "正式（20 个）", "D 盲指 · 原姿势（9 个）", "D 盲指 · 姿势扰动（9 个）"])
-        sessionField.frame.size.width = 55; seedField.frame.size.width = 90
+        sessionField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        seedField.widthAnchor.constraint(equalToConstant: 140).isActive = true
         sessionField.target = self; sessionField.action = #selector(orderChanged)
         settings.addArrangedSubview(row([sourcePicker, kindPicker,
-            NSTextField(labelWithString: "比较轮次"), sessionField, NSTextField(labelWithString: "随机种子"), seedField]))
+            NSTextField(labelWithString: "比较轮次"), sessionField, NSTextField(labelWithString: "目标顺序编号"), seedField]))
         settings.addArrangedSubview(orderLabel)
         postureField.placeholderString = "坐姿、手臂支撑点、模式参数调整"; postureField.widthAnchor.constraint(equalToConstant: 580).isActive = true
         settings.addArrangedSubview(row([NSTextField(labelWithString: "姿势记录"), postureField]))
@@ -185,7 +205,7 @@ final class PracticeWindowController: NSWindowController, NSWindowDelegate {
         nextButton.target = self; nextButton.action = #selector(nextBlind); nextButton.isHidden = true
         lockButton.target = self; lockButton.action = #selector(lockBlind); lockButton.isHidden = true
         skipButton.target = self; skipButton.action = #selector(skipTarget); skipButton.isHidden = true
-        let footer = row([button("开启移动", #selector(startMovement)), button("冻结", #selector(freezeMovement)),
+        let footer = row([NSTextField(labelWithString: "在手表开启移动"), button("冻结", #selector(freezeMovement)),
                           lockButton, nextButton, skipButton, button("结束本轮 / 保留失败", #selector(stopRun))])
         footer.translatesAutoresizingMaskIntoConstraints = false; canvas.addSubview(footer)
         NSLayoutConstraint.activate([footer.centerXAnchor.constraint(equalTo: canvas.centerXAnchor),
@@ -204,15 +224,13 @@ final class PracticeWindowController: NSWindowController, NSWindowDelegate {
         guard !active else { return }
         if let mode = source.mode { requestedMode = mode; onSelectMode?(mode) }
     }
-    @objc private func startMovement() { guard active, blind == nil, source != .mouseReference else { return }; onStartMovement?() }
     @objc private func freezeMovement() { onFreezeMovement?() }
     @objc private func closeWindow() { window?.close() }
 
     @objc private func beginRun() {
         guard !active else { return }
         let seed = UInt64(seedField.stringValue) ?? 1
-        var context = metadata; context.posture = postureField.stringValue
-        context.runID = metadata.runID // Keep the common controller's run identifier.
+        var context = metadataProvider?() ?? metadata; context.posture = postureField.stringValue
         effortPicker.selectItem(at: 0); feedbackField.stringValue = ""
         currentFile = newEvidenceFile()
         do {

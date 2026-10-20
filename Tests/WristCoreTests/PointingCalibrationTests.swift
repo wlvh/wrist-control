@@ -5,6 +5,16 @@ import Testing
 import WristMacOutput
 
 struct PointingCalibrationTests {
+    @Test func privateEvidencePreservesTrainingSamplesWithoutClaimingIndependentAccuracy() throws {
+        let model = try PointingCalibration.fit(observations: observations(), screen: screen)
+        let record = CalibrationEvidence(model: model, macBuild: "4", watchBuild: "4", sourceRevision: "test")
+        let json = try #require(JSONSerialization.jsonObject(with: record.encoded()) as? [String: Any])
+        let points = try #require(json["observations"] as? [[String: Any]])
+        #expect(points.count == 5)
+        #expect((points[0]["samples"] as? [[String: Any]])?.count == 16)
+        #expect((json["independentAccuracy"] as? String)?.contains("Not established") == true)
+        #expect(json["calibrationID"] as? String == model.calibrationID.uuidString)
+    }
     let screen = PointerScreen(displayID: 9, layoutID: 42, origin: PointerPoint(x: -1600, y: 80),
                                width: 1600, height: 1000, backingScale: 2)
 
