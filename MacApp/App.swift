@@ -337,7 +337,9 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func toggleControl() {
-        wheel.setEnabled(!wheel.enabled); bluetooth.targetDidChange("mac_user_control"); refreshDiagnostics()
+        wheel.setEnabled(!wheel.enabled)
+        if wheel.enabled { bluetooth.start() } // retry a launch deferred by locked protected data
+        bluetooth.targetDidChange("mac_user_control"); refreshDiagnostics()
     }
 
     @objc private func requestPermission() {
@@ -422,6 +424,7 @@ final class MacApplication: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 MainActor.assumeIsolated {
                 guard let self else { return }
                 self.wheel.protectionAvailable = name == Notification.Name.NSApplicationProtectedDataDidBecomeAvailable
+                if self.wheel.protectionAvailable { self.bluetooth.start() }
                 self.wheel.reset(); self.bluetooth.journal.record("protected_data_changed", detail: name.rawValue)
                 self.bluetooth.targetDidChange(name.rawValue); self.bluetooth.journal.persist()
                 }
