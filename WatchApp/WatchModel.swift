@@ -10,6 +10,8 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     @Published var isReady = false
     @Published var controlEnabled = false
     @Published var canToggle = false
+    @Published private(set) var hasAuthenticatedSession = false
+    @Published private(set) var connectionIssue: String?
     @Published var crownPosition = 0.0
     @Published var focusGeneration = 0
     @Published var inputText = "等待连接"
@@ -84,6 +86,10 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     private var lastExportID: UInt32?
     private var lastExportProgress = 0.0
     private var now: Double { ProcessInfo.processInfo.systemUptime }
+    var connectionAttemptActive: Bool { peripheral != nil }
+    var canRetryConnection: Bool {
+        active && !hasAuthenticatedSession && peripheral == nil && manager?.state == .poweredOn
+    }
 
     override init() {
         super.init()
@@ -164,6 +170,20 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         flushIntent()
     }
 
+    /// A local discovery retry: it never enables output, creates keys, or bypasses
+    /// the handshake. An in-flight connection must finish before this is enabled,
+    /// so the button cannot cancel and overlap two attempts on the same peripheral.
+    func retryConnection() {
+        guard canRetryConnection else { return }
+        manager?.stopScan()
+        invalidateConnection(reason: "user_connection_retry")
+        connectionIssue = nil
+        statusText = "已请求重新连接，请稍候"
+        journal.record("local_connection_retry")
+        // Keep the existing one-second cancellation gap before the timer scans.
+        journal.persist()
+    }
+
     private func nextCycle() -> UInt32? {
         let previous = max(intentCycle, confirmedCycle)
         guard previous < UInt32.max else { reconnect("cycle_exhausted"); return nil }
@@ -205,6 +225,8 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
 
     func setSettings(_ open: Bool) {
         settingsOpen = open; delta.rebase(to: crownPosition); buffer.clear(); mapping.reset()
+        journal.record(open ? "settings_opened" : "settings_closed")
+        journal.persist()
         guard session != 0, let cycle = nextCycle() else { return }
         phase = controlEnabled ? .reading : .paused
         if open { pendingActions.removeAll() }
@@ -236,6 +258,7 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     }
 
     private func invalidateConnection(reason: String) {
+        hasAuthenticatedSession = false
         clearIntent(); link = nil; hello = nil; pendingProof = nil; controlEnabled = false; session = 0; sequence = 0; ticket = 0
         writeInFlight = nil; exportData = nil; exportWriting = false; lastExportID = nil
         input = nil; status = nil; diagnostics = nil
@@ -377,8 +400,10 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        guard central === manager else { return }
         journal.record("bluetooth_state", detail: String(central.state.rawValue))
         guard central.state == .poweredOn else {
+            connectionIssue = nil
             invalidateConnection(reason: "bluetooth_unavailable")
             statusText = central.state == .unauthorized ? "请在设置允许蓝牙" : "蓝牙尚不可用"
             return
@@ -388,7 +413,8 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
 
     func centralManager(_ central: CBCentralManager, didDiscover candidate: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard active, peripheral == nil else { return }
+        guard active, central === manager, central.isScanning,
+              peripheral == nil, now >= retryAfter else { return }
         central.stopScan(); peripheral = candidate; candidate.delegate = self
         connectingAt = now; statusText = "已找到，正在连接"
         journal.record("discovered", detail: "rssi=\(RSSI)")
@@ -397,18 +423,32 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
 
     func centralManager(_ central: CBCentralManager, didConnect connected: CBPeripheral) {
         guard active, connected === peripheral else { central.cancelPeripheralConnection(connected); return }
-        statusText = "连接成功，验证电脑身份"
+        connectionIssue = nil
+        statusText = "蓝牙已连接，正在验证电脑"
         journal.record("connected"); connected.discoverServices([CBUUID(string: BLEIDs.service)])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect candidate: CBPeripheral, error: Error?) {
         guard candidate === peripheral else { return }
-        if let e = error as NSError? { journal.record("connect_error", detail: "domain=\(e.domain);code=\(e.code);\(e.localizedDescription)") }
+        if let e = error as NSError? {
+            journal.record("connect_error", detail: "domain=\(e.domain);code=\(e.code);\(e.localizedDescription)")
+            if e.domain == CBErrorDomain, e.code == CBError.Code.encryptionTimedOut.rawValue {
+                connectionIssue = "已找到电脑，但蓝牙加密连接未建立"
+            } else {
+                connectionIssue = "蓝牙连接未建立，控制暂不可用"
+            }
+        } else {
+            connectionIssue = "蓝牙连接未建立，控制暂不可用"
+        }
         reconnect("connect_failed")
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral candidate: CBPeripheral, error: Error?) {
-        guard candidate === peripheral else { return }; reconnect("disconnected")
+        guard candidate === peripheral else { return }
+        if let e = error as NSError? {
+            journal.record("disconnect_error", detail: "domain=\(e.domain);code=\(e.code);\(e.localizedDescription)")
+        }
+        reconnect("disconnected")
     }
 
     func peripheral(_ candidate: CBPeripheral, didDiscoverServices error: Error?) {
@@ -462,6 +502,8 @@ final class WatchModel: NSObject, ObservableObject, CBCentralManagerDelegate, CB
         case .ready, .exportRequest:
             guard let pointerStatus = PointerStatus(data: payload) else { reconnect("invalid_pointer_status"); return }
             guard frame.session != 0 else { reconnect("zero_session"); return }
+            hasAuthenticatedSession = true
+            connectionIssue = nil
             lastStatus = now; ticket = frame.ticket
             if frame.session != session {
                 clearIntent(); session = frame.session; sequence = 0

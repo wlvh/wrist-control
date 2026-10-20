@@ -66,3 +66,9 @@ Xcode 的命令行报告 `No Accounts` 时，界面也显示未登录；设备�
 本轮首次通用 Watch 构建虽签名成功，描述文件未包含目标手表，实际安装返回 0xe8008012；改为指定真实 UDID 的正常 Xcode 自动续签／注册后，文件包含目标并安装启动成功。UDID、profile、证书与原始日志不入仓库。
 
 本轮还区分出了两个后续故障：Mac 应用数据保护钥匙串返回 item-not-found，在新旧访问组相同的前提下从原私有安装材料恢复同一应用密钥；后来蓝牙系统仍报告 encryption failure / MIC failure。App 双向认证与系统蓝牙连接加密不是同一层；恢复应用密钥不能证明系统连接已经恢复。已获使用者明确授权，只重建该 Watch 与 Mac 的开发配对，未重置钥匙串或解除手表与 iPhone 的配对。修复结果待实际重新连接，不能提前写成成功经验。
+
+后续实测确认重建开发配对未解决运行时连接。0.3 build 4 两端安装并由使用者打开后，Watch 记录 15 次 `CBErrorDomain / 15`，无 `didConnect`；本地 SDK 的 `CBError.h` 对应 `encryptionTimedOut`。不要把它与 `CBATTErrorDomain` 的 `0x0F insufficientEncryption` 混淆。应用此时尚未开始 HMAC 身份验证、消息长度检查或动作处理；改动作算法、重建应用密钥不能据此称为修复方案。[Apple 错误类型](https://developer.apple.com/documentation/corebluetooth/cberror-swift.struct/encryptiontimedout)
+
+保持设备、系统与原应用密钥不变，从 `253ff29` 原始源码重新签名安装 0.2 对照：使用者仍报告循环中断，日志有 10 次 `connect_failed`、无 `connected`。这排除了“只在 0.3 才发生”的判断，但尚不能排除两版共有的连接路径或设备状态。系统日志里相反连接方向曾加密成功，也不能算作腕控应用连通。
+
+build 5 只改善故障可理解性：未认证时显示连接原因及本地重试；进行中的连接不被重试按钮取消；蓝牙关闭或未授权时，当前状态优先于旧加密错误。输入资格与认证不放宽。正常重启手表是后续单独验证，不能提前记为修复成功。

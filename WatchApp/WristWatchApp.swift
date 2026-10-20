@@ -37,16 +37,25 @@ private struct CrownView: View {
                 Button { model.setSettings(true) } label: { Image(systemName: "gearshape") }
                     .buttonStyle(.plain).accessibilityLabel("设置")
             }
-            Text(model.statusText).font(.system(size: 11)).lineLimit(2).multilineTextAlignment(.center)
+            Text(model.connectionIssue ?? model.statusText).font(.system(size: 11)).lineLimit(3).multilineTextAlignment(.center)
                 .foregroundStyle(model.isReady ? Color.green : Color.secondary)
-            movementControl
-            HStack(spacing: 5) {
-                Button("左击") { model.click(.left); crownFocused = true }
-                Button("右击") { model.click(.right); crownFocused = true }
-            }.disabled(!model.isReady)
-            Text("双击：连续点两次左击").font(.system(size: 10)).foregroundStyle(.secondary)
-            Button(model.controlEnabled ? "暂停腕控" : "继续腕控") { model.toggleControl(); crownFocused = true }
-                .buttonStyle(.plain).font(.system(size: 12)).disabled(!model.canToggle)
+            if model.hasAuthenticatedSession {
+                movementControl
+                HStack(spacing: 5) {
+                    Button("左击") { model.click(.left); crownFocused = true }
+                    Button("右击") { model.click(.right); crownFocused = true }
+                }.disabled(!model.isReady)
+                Text("双击：连续点两次左击").font(.system(size: 10)).foregroundStyle(.secondary)
+                Button(model.controlEnabled ? "暂停腕控" : "继续腕控") { model.toggleControl(); crownFocused = true }
+                    .buttonStyle(.plain).font(.system(size: 12)).disabled(!model.canToggle)
+            } else {
+                Text("连接就绪后才能移动、点击和滚轮")
+                    .font(.system(size: 10)).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                Button(model.connectionAttemptActive ? "正在连接…" : "重新连接") {
+                    model.retryConnection(); crownFocused = true
+                }
+                    .disabled(!model.canRetryConnection)
+            }
         }
         .focusable(!model.settingsOpen)
         .focused($crownFocused)
@@ -59,17 +68,23 @@ private struct CrownView: View {
         .sheet(isPresented: Binding(get: { model.settingsOpen }, set: { model.setSettings($0) })) {
             List {
                 Text("0.3 四模式实验").font(.caption)
+                if !model.hasAuthenticatedSession {
+                    Text("模式和速度需要连接电脑后才能调整。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Picker("模式", selection: Binding(get: { model.mode }, set: { model.selectMode($0) })) {
                     Text("A 转向跟手").tag(PointerMode.a)
                     Text("B 翻转跟手").tag(PointerMode.b)
                     Text("C 倾斜摇杆").tag(PointerMode.c)
                     Text("D 指向定位").tag(PointerMode.d)
-                }
+                }.disabled(!model.hasAuthenticatedSession)
                 if model.mode == .a || model.mode == .b {
                     Text("本模式速度：")
-                    Button("慢 · 800 点/弧度") { model.setSensitivity(800) }
-                    Button("初值 · 1600 点/弧度") { model.setSensitivity(1600) }
-                    Button("快 · 2400 点/弧度") { model.setSensitivity(2400) }
+                    Group {
+                        Button("慢 · 800 点/弧度") { model.setSensitivity(800) }
+                        Button("初值 · 1600 点/弧度") { model.setSensitivity(1600) }
+                        Button("快 · 2400 点/弧度") { model.setSensitivity(2400) }
+                    }.disabled(!model.hasAuthenticatedSession)
                 } else if model.mode == .c { Text("偏着持续走，回中停止。速度与中立区可在电脑“模式参数”调整。") }
                 else { Text("先在电脑点 D 五点标定。D 保留标定关系；参考、屏幕或佩戴改变后须重校。") }
                 if #available(watchOS 11.0, *) {
