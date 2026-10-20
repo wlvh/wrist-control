@@ -47,9 +47,11 @@ Mac 蓝牙切换后的完整系统日志及独立只读复核，确认新增 11 
 
 使用者目前不方便重启 Mac，重启步骤暂缓，未执行；随后已授权准备一次明确覆盖失败尝试的 Apple 协议日志采集。保留 build 5、原配对与应用密钥，不继续重复开关蓝牙。
 
-已实际下载并阅读 [Apple 当前提供的 macOS 蓝牙日志说明](https://developer.apple.com/feedback-assistant/profiles-and-logs/?name=bluetooth)：该 PDF 标注 Copyright 2022，第 4 步要求安装日志描述文件后重启系统，描述文件有效期为 3 天。遵循使用者不重启的约束，本次没有安装该描述文件。PacketLogger 的独立采集能力尚未验证；已登录的内置浏览器访问 Additional Tools 列表时，反复跳到空白的开发者协议入口，已请使用者在日常浏览器下载官方工具。不能将成功打开 PDF、工具下载准备或空日志算作完成了协议采集。
+已实际下载并阅读 [Apple 当前提供的 macOS 蓝牙日志说明](https://developer.apple.com/feedback-assistant/profiles-and-logs/?name=bluetooth)：该 PDF 标注 Copyright 2022，第 4 步要求安装日志描述文件后重启系统，描述文件有效期为 3 天。遵循使用者不重启的约束，本次没有安装该描述文件。内置浏览器的 Additional Tools 列表曾反复跳到空白协议入口；使用者随后通过日常浏览器完成正式版 Additional Tools for Xcode 27 下载，该下载阻塞已解除。
 
-本轮私有采集目录和版本清单已准备；重新核对 Mac 为 0.3.0 build 5，且只运行一份已安装实例。正式录制尚未开始。后续先验证工具收到真实事件，再通知使用者复现一次连接失败；录制期间不使用调试器或通过开发连接导出 Watch 日志。若工具必须依赖重启后生效的日志配置，明确保留该阻塞，不绕过它宣布成功。原始记录仅保存在忽略的私有目录；现有证据不授权读取或修改系统私钥。
+2026-10-21 已核对下载镜像校验和、PacketLogger 的 Apple 签名及 Gatekeeper 接受结果，只安装 PacketLogger 至 `/Applications/PacketLogger.app`。包内工具实际为 26.0.0（build 26.0），没有升级 Xcode。执行 `File → New macOS Trace` 预检约 41 秒，系统记录 `PacketLogger authenticated`，但界面始终为零 HCI／ACL／SCO／ISO；停止时仅增加一条工具自身的断开 Note。已确认全部设备、全部类型、空搜索过滤条件。未采到有效协议数据，不能将这个 Note 当作 Watch 断线证据，也不能以工具获准访问服务代替收到数据。
+
+本轮私有目录、版本清单、预检截图和相关系统日志已保存；Mac 仍为 0.3.0 build 5，未改配对、密钥或权限边界。正式的受控失败复现尚未开始，预检已停止，没有有效协议文件。下一步在使用者方便重启时按官方流程安装日志配置、正常重启，再验证真实数据计数后安排一次失败复现；本轮不继续要求手表重复尝试。录制期间不使用调试器或通过开发连接导出 Watch 日志。原始记录仅保存在忽略的私有目录；现有证据不授权读取或修改系统私钥。
 
 ## 软件审查和自动检查覆盖
 
