@@ -57,3 +57,24 @@ Xcode 的命令行报告 `No Accounts` 时，界面也显示未登录；设备�
 专用开发钥匙串后来处于锁定状态，构建停在 codesign，并不表示要重建证书。只读确认锁定状态后，由设备拥有者在系统窗口授权，原有证书和私钥继续完成签名。开发签名钥匙串与应用内设备密钥的数据保护钥匙串用途不同，诊断时需先分清是哪一种。
 
 “电脑窗口最小化”指点 Mac 腕控窗口左上角黄色按钮；“退出手表腕控回到表盘”则会使 Watch 应用进入非活动状态。这两件事对本实现不同：前者已经验证仍可滚动，后者按当前前台策略断开。测试说明需要直接指明是哪台设备，不能只说“退出”或“收起”。
+
+
+## 0.3 / Xcode 27.1 的设备入口核对
+
+2026-10-20 实机检查：Xcode 27.1 (27A9275) 的 Window 菜单没有 Device Hub。Device Hub 已作为 Xcode 内的独立应用存在，实际路径为 `/Applications/Xcode.app/Contents/Applications/DeviceHub.app`，bundle ID `com.apple.dt.Devices`，本机版本 27.1 (255.6.8.1)。可用 Finder 打开或执行 `open /Applications/Xcode.app/Contents/Applications/DeviceHub.app`。不要再沿用“Window → Device Hub”的旧路径指导使用者。
+
+同日本机界面进一步核对到菜单入口：**Xcode → Open Developer Tool → Device Hub**。这是读取实际菜单后的结果，不能与旧 Window 菜单路径混用。
+
+本轮首次通用 Watch 构建虽签名成功，描述文件未包含目标手表，实际安装返回 0xe8008012；改为指定真实 UDID 的正常 Xcode 自动续签／注册后，文件包含目标并安装启动成功。UDID、profile、证书与原始日志不入仓库。
+
+本轮还区分出了两个后续故障：Mac 应用数据保护钥匙串返回 item-not-found，在新旧访问组相同的前提下从原私有安装材料恢复同一应用密钥；后来蓝牙系统仍报告 encryption failure / MIC failure。App 双向认证与系统蓝牙连接加密不是同一层；恢复应用密钥不能证明系统连接已经恢复。已获使用者明确授权，只重建该 Watch 与 Mac 的开发配对，未重置钥匙串或解除手表与 iPhone 的配对。修复结果待实际重新连接，不能提前写成成功经验。
+
+后续实测确认重建开发配对未解决运行时连接。0.3 build 4 两端安装并由使用者打开后，Watch 记录 15 次 `CBErrorDomain / 15`，无 `didConnect`；本地 SDK 的 `CBError.h` 对应 `encryptionTimedOut`。不要把它与 `CBATTErrorDomain` 的 `0x0F insufficientEncryption` 混淆。应用此时尚未开始 HMAC 身份验证、消息长度检查或动作处理；改动作算法、重建应用密钥不能据此称为修复方案。[Apple 错误类型](https://developer.apple.com/documentation/corebluetooth/cberror-swift.struct/encryptiontimedout)
+
+保持设备、系统与原应用密钥不变，从 `253ff29` 原始源码重新签名安装 0.2 对照：使用者仍报告循环中断，日志有 10 次 `connect_failed`、无 `connected`。2026-10-21 重新检查发现，对照时保存的 baseline Mac 日志内嵌的是 build 4，不能证明 0.2 Mac 已实际运行；因此这次对照不足以完整排除 0.3 的 Mac 实现影响，也不能排除两版共用路径或此前遗留的系统状态。源码／签名／安装材料与运行日志的证据应分开。系统日志里相反连接方向曾加密成功，也不能算作腕控应用连通。
+
+build 5 只改善故障可理解性：未认证时显示连接原因及本地重试；进行中的连接不被重试按钮取消；蓝牙关闭或未授权时，当前状态优先于旧加密错误。输入资格与认证不放宽。使用者正常重启手表后仍报告 0.2 循环中断，重启没有取得成功反馈。
+
+另一个签名故障不能与运行时蓝牙混为一谈：钥匙串 unlocked 不代表私钥使用已获准。本次旧身份返回 `errSecAuthFailed`；在使用者明确授权后，创建独立的新签名钥匙串和同团队 Apple Development 身份，生成后恢复原默认钥匙串。没有重置旧库、撤销旧证书或更换应用配对密钥。新证书与旧 profile 不匹配时，本机 Xcode 界面仍能操作账号而命令行报 No Accounts；通过界面的 Build 更新两个 profile，再由命令行绑定源码 SHA 生成安装包。最终检查实际签名、profile 内证书及 Watch 设备列表，不能只把界面上的 Build Succeeded 当最终安装证据。
+
+2026-10-21 补充复核：早期 build 3 曾到达 connected/subscribed/hello 后写入失败，后来才主要停在 didConnect 前；不得把两个阶段混写。PacketLogger 的预检完整时间窗另明确记录 Bluetooth Profile Required，这属于日志配置前提，不是腕控 MIC 的根因。[审查交接](../evidence/connection-failure-review-20261021.md)保留了相关修正。

@@ -66,7 +66,7 @@ public struct AuthenticatedLink {
     public init(key: SymmetricKey, role: Role) { self.key = key; self.role = role }
 
     private func signedBytes(_ packetBody: Data, purpose: Purpose, fromMac: Bool) -> Data {
-        Data("WristControl-v2/\(fromMac ? "mac" : "watch")/\(purpose.rawValue)/".utf8) + packetBody
+        Data("WristControl-v3/\(fromMac ? "mac" : "watch")/\(purpose.rawValue)/".utf8) + packetBody
     }
 
     public mutating func seal(_ payload: Data, purpose: Purpose) -> Data? {

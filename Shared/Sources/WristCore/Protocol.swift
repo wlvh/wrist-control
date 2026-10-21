@@ -10,12 +10,13 @@ public enum BLEIDs {
 public enum MessageKind: UInt8, CaseIterable {
     case hello = 1, ready, scroll, mark, idle, ack, rejected, exportRequest
     case challenge, authenticate, setControl
+    case pose, startMovement, stopMovement, setMode, leftClick, rightClick, setSensitivity, mainPage, clientInfo
 }
 
-/// A 20-byte action body. Version 2 actions travel inside an authenticated packet.
+/// A 20-byte header. Version 3 action bodies travel inside authenticated packets.
 /// A session is an isolation boundary, NOT authentication.
 public struct Frame: Equatable {
-    public static let version: UInt8 = 2
+    public static let version: UInt8 = 3
     public static let size = 20
     public let kind: MessageKind
     public let session: UInt64

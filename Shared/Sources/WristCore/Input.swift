@@ -64,16 +64,21 @@ public struct SessionGate {
         tickets[currentTicket] = now
         return currentTicket
     }
-    public mutating func accept(_ frame: Frame, now: TimeInterval, targetReady: Bool) -> String? {
+    public mutating func accept(_ frame: Frame, now: TimeInterval, targetReady: Bool, maxAge: TimeInterval = Self.lifetime) -> String? {
         // Pause/resume must remain reachable while output is paused. Authentication
         // is checked by the transport before this gate is called.
-        guard targetReady || frame.kind == .setControl else { return "target_unavailable" }
+        guard targetReady || [.setControl, .stopMovement, .setMode, .setSensitivity, .mainPage, .clientInfo].contains(frame.kind) else { return "target_unavailable" }
         guard session != 0, frame.session == session else { return "old_session" }
-        guard [.scroll, .idle, .setControl].contains(frame.kind) else { return "invalid_action" }
+        guard [.scroll, .idle, .setControl, .pose, .startMovement, .stopMovement, .setMode, .leftClick, .rightClick, .setSensitivity, .mainPage, .clientInfo].contains(frame.kind) else { return "invalid_action" }
         guard frame.sequence > lastSequence else { return "duplicate_or_reordered" }
-        guard let issued = tickets[frame.ticket], now >= issued, now - issued <= Self.lifetime else { return "expired_ticket" }
+        guard maxAge.isFinite, maxAge > 0, let issued = tickets[frame.ticket], now >= issued,
+              now - issued <= min(maxAge, Self.lifetime) else { return "expired_ticket" }
         guard frame.kind != .scroll || abs(Int64(frame.value)) <= 737_280 else { return "oversized_scroll" }
-        guard frame.kind == .scroll || (frame.kind == .setControl ? (0...1).contains(frame.value) : frame.value == 0) else { return "invalid_value" }
+        if [.setControl, .mainPage].contains(frame.kind), !(0...1).contains(frame.value) { return "invalid_value" }
+        if frame.kind == .idle, frame.value != 0 { return "invalid_value" }
+        if frame.kind == .setMode, PointerMode(rawValue: UInt8(clamping: frame.value)) == nil { return "invalid_value" }
+        if frame.kind == .setSensitivity, !(100...8000).contains(frame.value) { return "invalid_value" }
+        if [.startMovement, .stopMovement, .pose, .leftClick, .rightClick].contains(frame.kind), frame.value == 0 { return "invalid_value" }
         lastSequence = frame.sequence
         return nil
     }

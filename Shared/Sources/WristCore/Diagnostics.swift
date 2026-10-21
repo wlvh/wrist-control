@@ -12,6 +12,7 @@ public struct DiagnosticEvent: Codable {
 public final class Journal {
     public let source: String
     public let started = ISO8601DateFormatter().string(from: Date())
+    public let runID = UUID().uuidString
     public private(set) var events: [DiagnosticEvent] = []
     public private(set) var discarded = 0
     public static let capacity = 4000
@@ -24,15 +25,22 @@ public final class Journal {
     }
     public func snapshot() -> Data {
         struct Snapshot: Encodable {
-            let schema = 1
+            let schema = 3
             let source: String
             let started: String
+            let runID: String
+            let appVersion: String
+            let appBuild: String
+            let sourceRevision: String
             let os: String
             let clock = "uptime_seconds_local_to_this_device; never subtract across devices"
             let discarded: Int
             let events: [DiagnosticEvent]
         }
-        return (try? JSONEncoder().encode(Snapshot(source: source, started: started,
+        return (try? JSONEncoder().encode(Snapshot(source: source, started: started, runID: runID,
+             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "test",
+             appBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "test",
+             sourceRevision: Bundle.main.object(forInfoDictionaryKey: "WristSourceRevision") as? String ?? "test",
              os: ProcessInfo.processInfo.operatingSystemVersionString, discarded: discarded, events: events))) ?? Data()
     }
     public func persist() {
@@ -40,7 +48,18 @@ public final class Journal {
         let folder = dir.appendingPathComponent("WristControl", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try snapshot().write(to: folder.appendingPathComponent("\(source)-latest.json"), options: .atomic)
+            let data = snapshot()
+            let runs = folder.appendingPathComponent("Runs", isDirectory: true)
+            try FileManager.default.createDirectory(at: runs, withIntermediateDirectories: true)
+            let destination = runs.appendingPathComponent("\(source)-\(runID).json")
+            let files = try FileManager.default.contentsOfDirectory(at: runs, includingPropertiesForKeys: [.fileSizeKey])
+            let bytes = files.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+            // Retain prior runs. When full, keep the live snapshot/export available
+            // instead of deleting evidence from earlier experiments.
+            if bytes < 20_000_000 || FileManager.default.fileExists(atPath: destination.path) {
+                try data.write(to: destination, options: .atomic)
+            }
+            try data.write(to: folder.appendingPathComponent("\(source)-latest.json"), options: .atomic)
         } catch { /* Export remains available from the in-memory snapshot. */ }
     }
 }

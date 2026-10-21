@@ -2,9 +2,9 @@ import AppKit
 import CoreGraphics
 import WristCore
 
-/// The only system-input output. No event tap, target PID, cursor movement,
-/// keyboard events, app activation, or page inspection.
+/// Wheel output only. Shared pointer routing supplies authentication/scope authority.
 final class SystemWheel {
+    var authority: () -> Bool = { true }
     var enabled = false
     var awake = true
     var displayAwake = true
@@ -62,11 +62,11 @@ final class SystemWheel {
         // Recheck at each output, including the actual protected data read. No
         // cached permission or unlock result can authorize a later action.
         let began = ProcessInfo.processInfo.systemUptime
-        guard state().canScroll, let pixels = accumulator.consume(points: points) else {
+        guard authority(), state().canScroll, let pixels = accumulator.consume(points: points) else {
             reset(); return false
         }
         guard pixels != 0 else { return true }
-        guard submit(pixels) else {
+        guard authority(), state().canScroll, submit(pixels) else {
             reset(); return false
         }
         postedCount += 1
