@@ -14,7 +14,7 @@
 | G2 自动检查 | `swift test --scratch-path build/root-tests`：103 tests / 9 suites passed；两个 native scheme 编译和签名构建通过，两个安装包的严格签名校验通过 |
 | G2 安装 | Mac 固定安装路径和原物理 Watch 均已覆盖安装 build 4；Watch profile 确认包含目标。Mac 无调试器启动，Watch 远程启动遇到开发连接超时后由使用者手动打开，新日志确认实际运行 build 4 |
 | G2 build 4 实测 | 使用者手动打开后确认仍循环断线、操作按钮无响应。新 Watch 日志绑定 `bb2ad65`／build 4：15 次 CBErrorDomain code 15，零 connected／subscribed；Mac 零握手。不是 A／点击通过证据 |
-| 0.2 对照 | `253ff29` 的 37 个原始文件逐字核验，沿用原身份重新签名安装两端 0.2.0 build 2。使用者确认同样循环；Watch 日志为 `system_wheel_v2`，10 次 connect_failed、零 connected／subscribed；未改配对密钥 |
+| 0.2 对照 | `253ff29` 的 37 个原始文件逐字核验，沿用原身份重新签名安装两端 0.2.0 build 2。使用者确认同样循环；Watch 日志为 `system_wheel_v2`，10 次 connect_failed、零 connected／subscribed；未改配对密钥；2026-10-21 复核发现 baseline Mac 日志内嵌 build 4，不能作为 0.2 同轮运行证据，双端对照结论需收窄 |
 | build 5 软件 | `f936f72b2c1596afbd931febc37529fe52367ee2`；明确显示未就绪原因，提供本地重新发现入口；正在连接时不可重试，认证后才显示控制按钮。独立审查通过；103 tests / 9 suites passed，两个 native scheme 编译与签名通过 |
 | build 5 安装 | 已从 0.2 对照恢复安装两端 0.3.0 build 5。严格签名校验、源码标记、新证书与 profile 匹配、Watch 目标设备、原访问组全部核对；两端无调试器启动成功 |
 | build 5 首次实测 | 版本／源码绑定的新 Watch 日志：5 次发现、4 次同样的 CBErrorDomain code 15，零 connected／subscribed；Mac 原应用密钥读取成功、广播已开始，但零握手。此时尚无本地设置／重试按钮的操作记录 |
@@ -26,7 +26,7 @@
 ## 安装与连接故障的实际过程
 
 1. 原开发描述文件已经过期，原证书仍有效。Xcode 账号重新登录后正常续签，没有新建配对密钥。通用 Watch 构建的 profile 起初只含另一条设备记录，实际安装被 0xe8008012 拒绝；指定原物理 Watch 自动更新 profile 后，确认它包含目标，再安装启动成功。
-2. Mac 原有应用密钥读取返回 item-not-found。确认新旧应用访问组与身份完全相同后，复制本机原始私有安装材料进行恢复；应用验证导入后删除临时文件。没有重新生成随机密钥。此举只证明该密钥成功导入，不代表本轮双向认证已通过。
+2. Mac 原有应用密钥读取返回 item-not-found。确认新旧应用访问组与身份完全相同后，复制本机原始私有安装材料进行恢复；应用验证导入后删除临时文件。没有重新生成随机密钥。此举只证明该密钥成功导入，不代表本轮双向认证已通过。 本次交接重新找到早期 build 3 的 Mac 运行日志：初始密钥读取 -25300、31 次订阅；Watch 同一阶段累计记录 31 次 connected/subscribed 及 hello 发送记录 和 30 次 att_write_failed，随后才出现连接前失败。不能把整个历史概括为“从未进入应用层”。
 3. 两端重启仍失败。Watch 记录 connect_failed，Mac 蓝牙系统同时记录加密失败和 MIC failure。用户授权只重建该 Watch 与 Mac 的开发配对；旧记录移除后通过独立 Device Hub 重新配对，并核验为原物理 Watch、paired / connected。随后 G1 重试仍失败，说明开发配对重建没有解决运行时连接。
 4. 源码中，应用密钥/HMAC失败使用了 ATT 的 insufficientAuthentication 错误。这混淆了应用认证与蓝牙链路认证；G2 改为普通请求失败，同时缺少可用应用密钥时不开始广播。修正版效果待实测，**不能把这一关联写成已证实的 MIC 根因**。
 5. 本机 Xcode 27.1 的 Window 菜单没有 Device Hub；实际独立入口是 `/Applications/Xcode.app/Contents/Applications/DeviceHub.app`。旧菜单指引已纠正，见[设备互联记录](../docs/device-connection-notes.md)。
@@ -51,7 +51,7 @@ Mac 蓝牙切换后的完整系统日志及独立只读复核，确认新增 11 
 
 2026-10-21 已核对下载镜像校验和、PacketLogger 的 Apple 签名及 Gatekeeper 接受结果，只安装 PacketLogger 至 `/Applications/PacketLogger.app`。包内工具实际为 26.0.0（build 26.0），没有升级 Xcode。执行 `File → New macOS Trace` 预检约 41 秒，系统记录 `PacketLogger authenticated`，但界面始终为零 HCI／ACL／SCO／ISO；停止时仅增加一条工具自身的断开 Note。已确认全部设备、全部类型、空搜索过滤条件。未采到有效协议数据，不能将这个 Note 当作 Watch 断线证据，也不能以工具获准访问服务代替收到数据。
 
-本轮私有目录、版本清单、预检截图和相关系统日志已保存；Mac 仍为 0.3.0 build 5，未改配对、密钥或权限边界。正式的受控失败复现尚未开始，预检已停止，没有有效协议文件。下一步在使用者方便重启时按官方流程安装日志配置、正常重启，再验证真实数据计数后安排一次失败复现；本轮不继续要求手表重复尝试。录制期间不使用调试器或通过开发连接导出 Watch 日志。原始记录仅保存在忽略的私有目录；现有证据不授权读取或修改系统私钥。
+本轮私有目录、版本清单、预检截图和相关系统日志已保存；Mac 仍为 0.3.0 build 5，未改配对、密钥或权限边界。正式的受控失败复现尚未开始，预检已停止，没有有效协议文件。当前交由使用者安排独立审查，不再继续新的实体尝试。本次按预检完整时间窗补取 bluetoothd 日志，明确读到 PacketLogger authenticated → Starting Live Logging → Bluetooth Profile Required；旧消息文字筛选遗漏了最后两行。缺日志配置解释采集前提，不能解释腕控断线。是否采用官方安装配置／重启流程取得更多证据，应与根因审查分开决定。录制期间不使用调试器或通过开发连接导出 Watch 日志。原始记录仅保存在忽略的私有目录；现有证据不授权读取或修改系统私钥。
 
 ## 软件审查和自动检查覆盖
 
@@ -72,3 +72,7 @@ G2 相对运动在周期开始读取实际光标，随后累计已接受目标�
 5. 总暂停、锁屏、权限撤销、断线、参考／显示器变化，确认不补动、不补点、失效 D 不继续。
 
 0.2 的 Edge/Finder/聊天滚轮与锁屏证据仍是历史结果。没有使用者的本轮实体反馈，不宣布最自然模式或 0.3 整体验收完成。
+
+## 2026-10-21 审查交接更正
+
+早期 build 3 的写入失败、后来 build 4/5 的连接前失败是不同阶段。名为 baseline-mac-observed.json 的文件实际属于 build 4，与 build4-mac-failed.json 同一 runID；原 0.2 的源码、两个签名产物与安装元数据存在，但缺少同轮可独立确认的 Mac 运行日志。build 5 的 4 次与累计 15 次来自同一运行、前者是后者前缀，不能相加。没有证据证明重启 Mac 能修复腕控，也没有执行该对照。详细事实、反例与待审问题见[连接失败审查交接](connection-failure-review-20261021.md)。
